@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 from contracts import TwinState, LLMConstraint, RLAction
 
@@ -19,6 +19,8 @@ class SimulationStore:
 
         # Current selected region
         self.region: str = "Chennai"
+
+        self.conversations: Dict[str,Dict[str, Any]] = {}
 
     # --------------------------------------------------------
     # CONSTRAINTS
@@ -59,6 +61,29 @@ class SimulationStore:
 
     def get_history(self) -> List[dict]:
         return self.history
+    
+
+    def start_conversation(self, zone_id: str):
+        self.conversations[zone_id] = {
+            "active": True,
+            "iteration": 1,
+        }
+
+
+    def get_conversation(self, zone_id: str) -> Optional[Dict[str, Any]]:
+        return self.conversations.get(zone_id)
+
+
+    def update_conversation(self, zone_id: str, **kwargs):
+        if zone_id not in self.conversations:
+            self.start_conversation(zone_id)
+
+        self.conversations[zone_id].update(kwargs)
+
+
+    def end_conversation(self, zone_id: str):
+        if zone_id in self.conversations:
+            self.conversations[zone_id]["active"] = False
 
     # --------------------------------------------------------
     # REGION
