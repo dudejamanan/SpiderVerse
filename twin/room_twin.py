@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 
 from twin.weather_client import get_current_weather
 
+from twin.baseline_schedule import get_baseline_setpoint
+
+from twin.regions import get_region
+
+from contracts import TwinState
+
 from twin.thermal_model import (
     ThermalParameters,
     calculate_next_temperature,
@@ -31,14 +37,16 @@ class RoomTwin:
         R: float,
         C: float,
         window_area: float,
-        latitude: float,
-        longitude: float,
+        region_id: str,
         initial_temp_c: float = 24.0,
     ):
         self.zone_id = zone_id
 
-        self.latitude = latitude
-        self.longitude = longitude
+        region = get_region(region_id)
+
+        self.region_id = region_id
+        self.latitude = region.latitude
+        self.longitude = region.longitude
 
         self.thermal_params = ThermalParameters(
             R=R,
@@ -62,6 +70,22 @@ class RoomTwin:
         self.energy_draw_kw = 0.0
         self.current_setpoint_c = 24.0
 
+    def apply_baseline_schedule(
+        self,
+        hour: int,
+        occupancy_count: int,
+    ) -> float:
+        """
+        Apply the static baseline schedule and return its setpoint.
+        """
+
+        self.current_setpoint_c = get_baseline_setpoint(
+            hour=hour,
+            occupancy_count=occupancy_count,
+        )
+
+        return self.current_setpoint_c
+
     def update_weather(self) -> None:
         """
         Update the twin's outdoor conditions using Open-Meteo.
@@ -75,6 +99,23 @@ class RoomTwin:
         self.outdoor_temp_c = weather["outdoor_temp_c"]
         self.outdoor_rh_pct = weather["outdoor_rh_pct"]
         self.solar_radiation_w_m2 = weather["solar_radiation_w_m2"]
+
+    def set_weather(
+        self,
+        outdoor_temp_c: float,
+        outdoor_rh_pct: float,
+        solar_radiation_w_m2: float,
+    ) -> None:
+        """
+        Set weather conditions directly.
+
+        Useful for deterministic simulations and tests.
+        """
+
+        self.outdoor_temp_c = outdoor_temp_c
+        self.outdoor_rh_pct = outdoor_rh_pct
+        self.solar_radiation_w_m2 = solar_radiation_w_m2
+
 
     def step(
         self,
@@ -165,20 +206,48 @@ class RoomTwin:
 
         self.co2_ppm = max(420.0, self.co2_ppm)
 
-    def get_state(self) -> dict:
+
+    def simulate(
+        self,
+        steps: int,
+        dt: float,
+        hvac_action: float,
+        occupancy_count: int,
+    ) -> list[TwinState]:
+        """
+        Run the twin for a number of timesteps.
+
+        Returns the state after every timestep.
+        """
+
+        states = []
+
+        for _ in range(steps):
+            state = self.step(
+                dt=dt,
+                hvac_action=hvac_action,
+                occupancy_count=occupancy_count,
+            )
+
+            states.append(state)
+
+        return states
+
+    def get_state(self) -> TwinState:
         """
         Return the current state of the room.
         """
 
-        return {
-            "zone_id": self.zone_id,
-            "indoor_temp_c": self.indoor_temp_c,
-            "indoor_rh_pct": self.indoor_rh_pct,
-            "co2_ppm": self.co2_ppm,
-            "outdoor_temp_c": self.outdoor_temp_c,
-            "outdoor_rh_pct": self.outdoor_rh_pct,
-            "occupancy_count": self.occupancy_count,
-            "current_setpoint_c": self.current_setpoint_c,
-            "energy_draw_kw": self.energy_draw_kw,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
+        return TwinState(
+            zone_id=self.zone_id,
+            indoor_temp_c=self.indoor_temp_c,
+            indoor_rh_pct=self.indoor_rh_pct,
+            co2_ppm=self.co2_ppm,
+            outdoor_temp_c=self.outdoor_temp_c,
+            outdoor_rh_pct=self.outdoor_rh_pct,
+            occupancy_count=self.occupancy_count,
+            current_setpoint_c=self.current_setpoint_c,
+            energy_draw_kw=self.energy_draw_kw,
+            timestamp=datetime.now(timezone.utc),
+        )
+        
