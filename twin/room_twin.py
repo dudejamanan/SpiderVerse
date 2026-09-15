@@ -1,13 +1,6 @@
-"""
-Room-level Digital Twin.
-
-Person 01: Twin Engineer
-"""
-
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from contracts import TwinState
-
 from twin.baseline_schedule import get_baseline_setpoint
 from twin.regions import get_region
 from twin.thermal_model import (
@@ -21,31 +14,17 @@ from twin.zone_config import get_zone_config
 
 
 class RoomTwin:
-    """
-    Digital twin representing one HVAC zone.
-
-    The twin combines:
-    - RC thermal dynamics
-    - solar heat gain
-    - occupancy heat gain
-    - HVAC thermal power
-    - indoor humidity dynamics
-    - indoor CO2 dynamics
-    - real outdoor weather
-    - baseline HVAC scheduling
-    """
-
     def __init__(
         self,
         zone_id: str,
         region_id: str,
         initial_temp_c: float = 24.0,
+        start_hour: int = 0,
     ):
         self.zone_id = zone_id
+        self.region_id = region_id
 
         region = get_region(region_id)
-
-        self.region_id = region_id
         self.latitude = region.latitude
         self.longitude = region.longitude
 
@@ -59,38 +38,97 @@ class RoomTwin:
             shading_coefficient=zone_config.shading_coefficient,
         )
 
-        self.indoor_temp_c = initial_temp_c
+        # ---------------------------------------------------------
+        # Initial state
+        # ---------------------------------------------------------
+        self.initial_temp_c = initial_temp_c
+        self.initial_indoor_rh_pct = 50.0
+        self.initial_co2_ppm = 420.0
+        self.initial_setpoint_c = 24.0
 
+        # ---------------------------------------------------------
+        # Simulation clock
+        # RL uses simulated time instead of wall-clock time.
+        # ---------------------------------------------------------
+        self.start_hour = start_hour
+
+        self.simulation_time = datetime(
+            year=2026,
+            month=1,
+            day=1,
+            hour=start_hour,
+            minute=0,
+            second=0,
+            tzinfo=timezone.utc,
+        )
+
+        # ---------------------------------------------------------
+        # Dynamic state
+        # ---------------------------------------------------------
+        self.indoor_temp_c = initial_temp_c
         self.outdoor_temp_c = 35.0
         self.outdoor_rh_pct = 50.0
         self.solar_radiation_w_m2 = 0.0
-
         self.indoor_rh_pct = 50.0
         self.co2_ppm = 420.0
+        self.occupancy_count = 0
+        self.hvac_action_w = 0.0
+        self.energy_draw_kw = 0.0
+        self.current_setpoint_c = 24.0
+
+    # ============================================================
+    # NEW: RESET
+    # ============================================================
+
+    def reset(self) -> TwinState:
+        """
+        Reset the room to its initial simulation state.
+
+        This is used by the Gymnasium RL environment at the
+        beginning of every training episode.
+        """
+
+        self.indoor_temp_c = self.initial_temp_c
+        self.indoor_rh_pct = self.initial_indoor_rh_pct
+        self.co2_ppm = self.initial_co2_ppm
 
         self.occupancy_count = 0
         self.hvac_action_w = 0.0
-
         self.energy_draw_kw = 0.0
-        self.current_setpoint_c = 24.0
+        self.current_setpoint_c = self.initial_setpoint_c
+
+        self.simulation_time = datetime(
+            year=2026,
+            month=1,
+            day=1,
+            hour=self.start_hour,
+            minute=0,
+            second=0,
+            tzinfo=timezone.utc,
+        )
+
+        return self.get_state()
+
+    # ============================================================
+    # BASELINE
+    # ============================================================
 
     def apply_baseline_schedule(
         self,
         hour: int,
         occupancy_count: int,
     ) -> float:
-        """Apply the static baseline schedule."""
-
         self.current_setpoint_c = get_baseline_setpoint(
             hour=hour,
             occupancy_count=occupancy_count,
         )
-
         return self.current_setpoint_c
 
-    def update_weather(self) -> None:
-        """Fetch and apply current outdoor weather."""
+    # ============================================================
+    # WEATHER
+    # ============================================================
 
+    def update_weather(self) -> None:
         weather = get_current_weather(
             latitude=self.latitude,
             longitude=self.longitude,
@@ -108,11 +146,13 @@ class RoomTwin:
         outdoor_rh_pct: float,
         solar_radiation_w_m2: float,
     ) -> None:
-        """Set weather directly for deterministic simulation/testing."""
-
         self.outdoor_temp_c = outdoor_temp_c
         self.outdoor_rh_pct = outdoor_rh_pct
         self.solar_radiation_w_m2 = solar_radiation_w_m2
+     
+    # ============================================================
+    # SIMULATION STEP
+    # ============================================================
 
     def step(
         self,
@@ -120,14 +160,6 @@ class RoomTwin:
         hvac_action: float,
         occupancy_count: int,
     ) -> TwinState:
-        """
-        Advance the digital twin by one timestep.
-
-        hvac_action:
-            Thermal HVAC power in watts.
-            Negative = cooling.
-            Positive = heating.
-        """
 
         if dt <= 0:
             raise ValueError("dt must be greater than zero.")
@@ -137,6 +169,10 @@ class RoomTwin:
 
         self.hvac_action_w = hvac_action
         self.occupancy_count = occupancy_count
+
+        # ---------------------------------------------------------
+        # Thermal model
+        # ---------------------------------------------------------
 
         q_solar = calculate_solar_heat_gain(
             solar_radiation_w_m2=self.solar_radiation_w_m2,
@@ -159,30 +195,37 @@ class RoomTwin:
             q_hvac_w=hvac_action,
         )
 
+        # ---------------------------------------------------------
+        # Humidity + CO2
+        # ---------------------------------------------------------
+
         self.update_humidity(dt)
         self.update_co2(dt)
 
-        # hvac_action represents thermal power.
-        # Electrical power = thermal power / COP.
+        # ---------------------------------------------------------
+        # Energy
+        # ---------------------------------------------------------
+
         self.energy_draw_kw = (
-            abs(hvac_action)
-            / self.zone_config.cop
-            / 1000.0
+            abs(hvac_action) / self.zone_config.cop / 1000.0
         )
+
+        # ---------------------------------------------------------
+        # NEW: advance simulated clock
+        #
+        # dt is in seconds for the physical simulation.
+        # ---------------------------------------------------------
+
+        self.simulation_time += timedelta(seconds=dt)
 
         return self.get_state()
 
+    # ============================================================
+    # HUMIDITY
+    # ============================================================
+
     def update_humidity(self, dt: float) -> None:
-        """
-        Update indoor relative humidity using a simple
-        ventilation/dehumidification response.
-
-        Cooling introduces additional moisture removal.
-        """
-
-        ventilation_rate = (
-            self.zone_config.ventilation_ach / 3600.0
-        )
+        ventilation_rate = self.zone_config.ventilation_ach / 3600.0
 
         humidity_exchange = (
             self.outdoor_rh_pct - self.indoor_rh_pct
@@ -194,7 +237,6 @@ class RoomTwin:
             * dt
         )
 
-        # Cooling produces dehumidification.
         if self.hvac_action_w < 0:
             cooling_magnitude = abs(self.hvac_action_w)
 
@@ -212,11 +254,11 @@ class RoomTwin:
             min(80.0, self.indoor_rh_pct),
         )
 
-    def update_co2(self, dt: float) -> None:
-        """
-        Update indoor CO2 using a room-volume and ventilation model.
-        """
+    # ============================================================
+    # CO2
+    # ============================================================
 
+    def update_co2(self, dt: float) -> None:
         room_volume = self.zone_config.volume_m3
 
         ventilation_rate = (
@@ -227,7 +269,6 @@ class RoomTwin:
 
         outdoor_co2_ppm = 420.0
 
-        # Approximate CO2 generation by occupants.
         co2_generation_lps = (
             self.occupancy_count * 0.005
         )
@@ -239,9 +280,8 @@ class RoomTwin:
         )
 
         ventilation_removal = (
-            self.co2_ppm - outdoor_co2_ppm
-        ) * (
-            ventilation_rate / room_volume
+            (self.co2_ppm - outdoor_co2_ppm)
+            * (ventilation_rate / room_volume)
         )
 
         self.co2_ppm += (
@@ -254,6 +294,10 @@ class RoomTwin:
             self.co2_ppm,
         )
 
+    # ============================================================
+    # MULTI-STEP SIMULATION
+    # ============================================================
+
     def simulate(
         self,
         steps: int,
@@ -261,7 +305,6 @@ class RoomTwin:
         hvac_action: float,
         occupancy_count: int,
     ) -> list[TwinState]:
-        """Run the twin for multiple timesteps."""
 
         if steps < 0:
             raise ValueError("steps cannot be negative.")
@@ -279,9 +322,11 @@ class RoomTwin:
 
         return states
 
-    def get_state(self) -> TwinState:
-        """Return the current digital-twin state."""
+    # ============================================================
+    # STATE
+    # ============================================================
 
+    def get_state(self) -> TwinState:
         return TwinState(
             zone_id=self.zone_id,
             indoor_temp_c=self.indoor_temp_c,
@@ -292,5 +337,8 @@ class RoomTwin:
             occupancy_count=self.occupancy_count,
             current_setpoint_c=self.current_setpoint_c,
             energy_draw_kw=self.energy_draw_kw,
-            timestamp=datetime.now(timezone.utc),
+
+            # IMPORTANT:
+            # Use simulated time rather than datetime.now().
+            timestamp=self.simulation_time,
         )

@@ -5,6 +5,7 @@ import numpy as np
 from rl.hvac_env import HVACEnv
 from gymnasium.utils.env_checker import check_env
 
+
 @dataclass
 class MockState:
     zone_id: str = "room_b"
@@ -143,3 +144,53 @@ def test_gymnasium_api():
     env = HVACEnv(twin=twin)
 
     check_env(env)
+
+def test_room_twin_reset_and_simulated_time():
+    from twin.room_twin import RoomTwin
+
+    twin = RoomTwin(
+        zone_id="room_b",
+        region_id="chennai",
+        initial_temp_c=26.0,
+        start_hour=8,
+    )
+
+    initial_state = twin.reset()
+
+    assert initial_state.indoor_temp_c == 26.0
+    assert initial_state.current_setpoint_c == 24.0
+    assert initial_state.timestamp.hour == 8
+
+    first_state = twin.step(
+        dt=3600.0,
+        hvac_action=0.0,
+        occupancy_count=2,
+    )
+
+def test_env_advances_one_hour():
+    from twin.room_twin import RoomTwin
+    from rl.hvac_env import HVACEnv
+
+    twin = RoomTwin(
+        zone_id="room_b",
+        region_id="chennai",
+        initial_temp_c=26.0,
+        start_hour=8,
+    )
+
+    env = HVACEnv(
+        twin=twin,
+        max_steps=24,
+    )
+
+    obs, info = env.reset()
+
+    assert info["simulated_time"].hour == 8
+
+    obs, reward, terminated, truncated, info = env.step(2)
+
+    assert info["simulated_step"] == 1
+
+    state = twin.get_state()
+
+    assert state.timestamp.hour == 9

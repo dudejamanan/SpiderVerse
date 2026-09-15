@@ -1,17 +1,22 @@
-# rl/hvac_env.py
-
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import gymnasium as gym
 import numpy as np
+
+from .hvac_controller import (
+    calculate_hvac_action,
+    get_evaluation_occupancy,
+)
 
 from .observation import (
     get_observation_space,
     get_state_value,
     state_to_observation,
 )
+
 from .reward import (
     RewardWeights,
     compute_reward,
@@ -20,52 +25,35 @@ from .reward import (
 
 class HVACEnv(gym.Env):
     """
-    Gymnasium environment wrapping the RoomTwin.
+    Gymnasium environment wrapping RoomTwin.
 
-    Observation:
-        1. indoor temperature
-        2. indoor humidity
-        3. CO2
-        4. outdoor temperature
-        5. outdoor humidity
-        6. time of day
-        7. occupancy
-        8. human constraint direction
-        9. human constraint intensity
+    One RL step represents one simulated hour.
 
-    Actions:
-        0 -> -1.0 C
-        1 -> -0.5 C
-        2 ->  0.0 C
-        3 -> +0.5 C
-        4 -> +1.0 C
+    PPO action:
+        0 -> -1.0°C
+        1 -> -0.5°C
+        2 ->  0.0°C
+        3 -> +0.5°C
+        4 -> +1.0°C
     """
 
     metadata = {"render_modes": []}
 
     ACTION_DELTAS = np.array(
-        [-1.0, -0.5, 0.0, 0.5, 1.0],
+        [
+            -1.0,
+            -0.5,
+            0.0,
+            0.5,
+            1.0,
+        ],
         dtype=np.float32,
     )
 
     MIN_SETPOINT_C = 17.0
     MAX_SETPOINT_C = 29.0
 
-    # Temporary actuator mapping.
-    #
-    # The current RoomTwin expects HVAC power in watts,
-    # while the RL action is a setpoint change in Celsius.
-    #
-    # Therefore:
-    #
-    #   -1.0 C -> -1000 W
-    #   -0.5 C ->  -500 W
-    #    0.0 C ->     0 W
-    #   +0.5 C ->  +500 W
-    #   +1.0 C -> +1000 W
-    #
-    # This is a prototype bridge and can be calibrated later.
-    WATTS_PER_DEGREE = 1000.0
+    TIMESTEP_SECONDS = 3600.0
 
     def __init__(
         self,
@@ -77,43 +65,44 @@ class HVACEnv(gym.Env):
         super().__init__()
 
         self.twin = twin
-
         self.current_constraint = (
             constraint or {}
         )
 
-        self.max_steps = max_steps
+        self.max_steps = int(max_steps)
+
+        if self.max_steps <= 0:
+            raise ValueError(
+                "max_steps must be greater than zero."
+            )
 
         self.reward_weights = (
-            reward_weights or RewardWeights()
+            reward_weights
+            or RewardWeights()
         )
 
         self.current_step = 0
 
-        # Five discrete RL actions.
-        self.action_space = gym.spaces.Discrete(5)
+        self.action_space = gym.spaces.Discrete(
+            len(self.ACTION_DELTAS)
+        )
 
-        # Nine normalized observations.
         self.observation_space = (
             get_observation_space()
         )
 
     def _get_state(self) -> Any:
-        """Get the current state from RoomTwin."""
         return self.twin.get_state()
 
     def _decode_action(
         self,
         action: int,
     ) -> float:
-        """
-        Convert a discrete action into
-        a setpoint delta in Celsius.
-        """
-
         action = int(action)
 
-        if not self.action_space.contains(action):
+        if not self.action_space.contains(
+            action
+        ):
             raise ValueError(
                 f"Invalid action: {action}"
             )
@@ -122,67 +111,82 @@ class HVACEnv(gym.Env):
             self.ACTION_DELTAS[action]
         )
 
-    @classmethod
-    def _delta_to_hvac_power(
-        cls,
-        delta_c: float,
-    ) -> float:
-        """
-        Convert setpoint delta into temporary
-        HVAC thermal power.
-
-        Negative -> cooling
-        Positive -> heating
-        """
-
-        return float(
-            delta_c * cls.WATTS_PER_DEGREE
-        )
-
     def set_constraint(
         self,
         constraint: dict | None,
     ) -> None:
-        """
-        Update the active human constraint.
-        """
-
         self.current_constraint = (
             constraint or {}
         )
 
-    def _get_occupancy(self) -> int:
+    def _get_occupancy_from_time(
+        self,
+        state: Any,
+    ) -> int:
         """
-        Read occupancy from the current
-        TwinState.
+        Determine deterministic evaluation occupancy
+        from the simulated timestamp.
+
+        Supports:
+        - datetime timestamps
+        - ISO timestamp strings
         """
 
-        state = self._get_state()
-
-        return int(
-            get_state_value(
-                state,
-                "occupancy_count",
-                0,
-            )
+        timestamp = get_state_value(
+            state,
+            "timestamp",
+            None,
         )
 
-    def step(self, action: int):
-        """
-        Execute one simulation step.
-        """
+        if timestamp is None:
 
-        # --------------------------------------------------
-        # 1. Decode RL action
-        # --------------------------------------------------
+            current_hour = 12
+
+        elif hasattr(timestamp, "hour"):
+
+            current_hour = int(
+                timestamp.hour
+            )
+
+        else:
+
+            try:
+                current_hour = int(
+                    datetime.fromisoformat(
+                        str(timestamp).replace(
+                            "Z",
+                            "+00:00",
+                        )
+                    ).hour
+                )
+
+            except (
+                ValueError,
+                TypeError,
+            ):
+
+                current_hour = 12
+
+        return get_evaluation_occupancy(
+            current_hour
+        )
+
+    def step(
+        self,
+        action: int,
+    ):
+
+        # =====================================================
+        # 1. Decode PPO action
+        # =====================================================
 
         requested_delta = (
             self._decode_action(action)
         )
 
-        # --------------------------------------------------
-        # 2. Read current twin state
-        # --------------------------------------------------
+        # =====================================================
+        # 2. Read current state
+        # =====================================================
 
         current_state = self._get_state()
 
@@ -194,9 +198,16 @@ class HVACEnv(gym.Env):
             )
         )
 
-        # --------------------------------------------------
-        # 3. Calculate new setpoint
-        # --------------------------------------------------
+        indoor_temp = float(
+            get_state_value(
+                current_state,
+                "indoor_temp_c",
+            )
+        )
+
+        # =====================================================
+        # 3. Apply setpoint safety bounds
+        # =====================================================
 
         new_setpoint = float(
             np.clip(
@@ -207,61 +218,96 @@ class HVACEnv(gym.Env):
             )
         )
 
-        # Because of the 17-29 C safety bounds,
-        # the actual change may be smaller than
-        # the requested change.
         actual_delta = (
             new_setpoint
             - current_setpoint
         )
 
-        # --------------------------------------------------
-        # 4. Convert RL action to HVAC power
-        # --------------------------------------------------
+        # =====================================================
+        # 4. Convert setpoint to HVAC thermal power
+        # =====================================================
 
-        hvac_power_w = (
-            self._delta_to_hvac_power(
-                actual_delta
+        hvac_power_w = calculate_hvac_action(
+            indoor_temp_c=indoor_temp,
+            target_setpoint_c=new_setpoint,
+        )
+
+        # =====================================================
+        # 5. Determine occupancy
+        # =====================================================
+
+        occupancy = (
+            self._get_occupancy_from_time(
+                current_state
             )
         )
 
-        # --------------------------------------------------
-        # 5. Get occupancy
-        # --------------------------------------------------
-
-        occupancy = self._get_occupancy()
-
-        # --------------------------------------------------
-        # 6. Update twin setpoint
-        # --------------------------------------------------
+        # =====================================================
+        # 6. Apply action to RoomTwin
+        # =====================================================
 
         self.twin.current_setpoint_c = (
             new_setpoint
         )
 
-        # --------------------------------------------------
-        # 7. Advance digital twin
-        # --------------------------------------------------
-
         state = self.twin.step(
-            dt=1.0,
+            dt=self.TIMESTEP_SECONDS,
             hvac_action=hvac_power_w,
             occupancy_count=occupancy,
         )
 
-        # --------------------------------------------------
-        # 8. Calculate reward
-        # --------------------------------------------------
+        # =====================================================
+        # 7. Safety checks
+        # =====================================================
 
-        reward, reward_info = compute_reward(
-            state,
-            self.current_constraint,
-            self.reward_weights,
+        indoor_temp_after = float(
+            get_state_value(
+                state,
+                "indoor_temp_c",
+            )
         )
 
-        # --------------------------------------------------
-        # 9. Advance RL episode
-        # --------------------------------------------------
+        if not np.isfinite(
+            indoor_temp_after
+        ):
+            raise RuntimeError(
+                "RoomTwin produced invalid "
+                f"indoor temperature: "
+                f"{indoor_temp_after}"
+            )
+
+        if (
+            indoor_temp_after < 10.0
+            or indoor_temp_after > 40.0
+        ):
+            raise RuntimeError(
+                "RoomTwin temperature became "
+                "physically unreasonable: "
+                f"{indoor_temp_after:.2f}°C"
+            )
+
+        # =====================================================
+        # 8. Calculate reward
+        # =====================================================
+
+        reward, reward_info = (
+            compute_reward(
+                state=state,
+                constraint=(
+                    self.current_constraint
+                ),
+                weights=(
+                    self.reward_weights
+                ),
+                setpoint_delta_c=(
+                    actual_delta
+                ),
+            )
+        )
+
+        # =====================================================
+        # 9. Advance episode
+        # =====================================================
 
         self.current_step += 1
 
@@ -272,23 +318,62 @@ class HVACEnv(gym.Env):
             >= self.max_steps
         )
 
-        # --------------------------------------------------
-        # 10. Convert state into observation
-        # --------------------------------------------------
+        # =====================================================
+        # 10. Build next observation
+        # =====================================================
 
-        observation = state_to_observation(
-            state,
-            self.current_constraint,
+        observation = (
+            state_to_observation(
+                state,
+                self.current_constraint,
+            )
         )
 
-        # --------------------------------------------------
-        # 11. Diagnostic information
-        # --------------------------------------------------
+        # =====================================================
+        # 11. Build diagnostic info
+        # =====================================================
 
         info = {
-            "setpoint_delta_c": actual_delta,
-            "new_setpoint_c": new_setpoint,
-            "hvac_power_w": hvac_power_w,
+            "setpoint_delta_c": (
+                actual_delta
+            ),
+
+            "new_setpoint_c": (
+                new_setpoint
+            ),
+
+            "requested_delta_c": (
+                requested_delta
+            ),
+
+            "hvac_power_w": (
+                hvac_power_w
+            ),
+
+            "energy_draw_kw": float(
+                get_state_value(
+                    state,
+                    "energy_draw_kw",
+                    0.0,
+                )
+            ),
+
+            "occupancy_count": (
+                occupancy
+            ),
+
+            "simulated_step": (
+                self.current_step
+            ),
+
+            "simulated_time": (
+                get_state_value(
+                    state,
+                    "timestamp",
+                    None,
+                )
+            ),
+
             **reward_info,
         }
 
@@ -306,28 +391,25 @@ class HVACEnv(gym.Env):
         seed: int | None = None,
         options: dict | None = None,
     ):
-        """
-        Reset the RL episode.
-
-        The current RoomTwin does not yet provide
-        a reset() method, so this currently resets
-        the RL episode counter while retaining the
-        twin's current state.
-        """
-
-        super().reset(seed=seed)
+        super().reset(
+            seed=seed
+        )
 
         self.current_step = 0
 
-        # Use RoomTwin.reset() if Person 1 adds it later.
-        if hasattr(self.twin, "reset"):
+        if hasattr(
+            self.twin,
+            "reset",
+        ):
             self.twin.reset()
 
         state = self._get_state()
 
-        observation = state_to_observation(
-            state,
-            self.current_constraint,
+        observation = (
+            state_to_observation(
+                state,
+                self.current_constraint,
+            )
         )
 
         info = {
@@ -335,6 +417,14 @@ class HVACEnv(gym.Env):
                 state,
                 "zone_id",
                 None,
+            ),
+
+            "simulated_time": (
+                get_state_value(
+                    state,
+                    "timestamp",
+                    None,
+                )
             ),
         }
 

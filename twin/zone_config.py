@@ -49,8 +49,8 @@ ZONE_CONFIGS = {
     ),
     "room_b": ZoneConfig(
         zone_id="room_b",
-        R=2.2,
-        C=166000.0,
+        R=0.02,
+        C=3_000_000.0,
         window_area_m2=4.0,
     ),
 }
