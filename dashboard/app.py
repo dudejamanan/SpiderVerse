@@ -53,9 +53,185 @@ st.markdown(
 
 st.sidebar.title("Controls")
 
+try:
+    locations_response = requests.get(
+        f"{API_URL}/locations",
+        timeout=5,
+    )
+    config_response = requests.get(
+        f"{API_URL}/building_config",
+        timeout=5,
+    )
+
+    if (
+        locations_response.status_code != 200
+        or config_response.status_code != 200
+    ):
+        st.error("Could not retrieve building configuration.")
+        st.stop()
+
+    locations = locations_response.json()
+    active_config = config_response.json()
+
+except requests.exceptions.ConnectionError:
+    st.error("Backend is not running. Start FastAPI first.")
+    st.stop()
+
+location_group = st.sidebar.selectbox(
+    "Location group",
+    ["india", "outside_india"],
+    format_func=lambda value: (
+        "India" if value == "india" else "Outside India"
+    ),
+)
+
+location_options = locations.get(location_group, [])
+location = st.sidebar.selectbox(
+    "Location",
+    location_options,
+    format_func=lambda item: item["name"],
+)
+
+st.sidebar.caption(
+    f"{location['name']}, {location['country']} | "
+    f"{location['latitude']:.4f}, {location['longitude']:.4f}"
+)
+
+existing_rooms = active_config.get("rooms", [])
+room_count = st.sidebar.number_input(
+    "Number of rooms",
+    min_value=1,
+    max_value=100,
+    value=max(1, len(existing_rooms)),
+    step=1,
+)
+
+room_requests = []
+
+for room_index in range(int(room_count)):
+    existing_room = (
+        existing_rooms[room_index]
+        if room_index < len(existing_rooms)
+        else {}
+    )
+
+    with st.sidebar.expander(f"Room {room_index + 1}"):
+        room_id = st.text_input(
+            "Room ID",
+            value=existing_room.get(
+                "room_id",
+                f"room_{room_index}",
+            ),
+            key=f"room_id_{room_index}",
+        )
+
+        room_requests.append({
+            "room_id": room_id,
+            "area_m2": st.number_input(
+                "Area (m²)",
+                min_value=0.1,
+                value=float(existing_room.get("area_m2", 30.0)),
+                key=f"area_{room_index}",
+            ),
+            "height_m": st.number_input(
+                "Height (m)",
+                min_value=0.1,
+                value=float(existing_room.get("height_m", 3.0)),
+                key=f"height_{room_index}",
+            ),
+            "window_area_m2": st.number_input(
+                "Window area (m²)",
+                min_value=0.0,
+                value=float(existing_room.get("window_area_m2", 5.0)),
+                key=f"window_area_{room_index}",
+            ),
+            "R": st.number_input(
+                "Thermal resistance R",
+                min_value=0.0001,
+                value=float(existing_room.get("R", 2.0)),
+                key=f"r_{room_index}",
+            ),
+            "C": st.number_input(
+                "Thermal capacitance C (J/K)",
+                min_value=1.0,
+                value=float(existing_room.get("C", 156000.0)),
+                key=f"c_{room_index}",
+            ),
+            "shading_coefficient": st.number_input(
+                "Shading coefficient",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(existing_room.get("shading_coefficient", 0.5)),
+                key=f"shading_{room_index}",
+            ),
+            "ventilation_ach": st.number_input(
+                "Ventilation ACH",
+                min_value=0.0,
+                value=float(existing_room.get("ventilation_ach", 1.5)),
+                key=f"ventilation_{room_index}",
+            ),
+            "hvac_capacity_w": st.number_input(
+                "HVAC capacity (W)",
+                min_value=1.0,
+                value=float(existing_room.get("hvac_capacity_w", 2000.0)),
+                key=f"capacity_{room_index}",
+            ),
+            "cop": st.number_input(
+                "COP",
+                min_value=0.1,
+                value=float(existing_room.get("cop", 3.5)),
+                key=f"cop_{room_index}",
+            ),
+            "initial_temp_c": st.number_input(
+                "Initial temperature (°C)",
+                value=float(existing_room.get("initial_temp_c", 24.0)),
+                key=f"initial_temp_{room_index}",
+            ),
+            "initial_rh_pct": st.number_input(
+                "Initial humidity (%)",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(existing_room.get("initial_rh_pct", 50.0)),
+                key=f"initial_rh_{room_index}",
+            ),
+            "initial_co2_ppm": st.number_input(
+                "Initial CO2 (ppm)",
+                min_value=0.0,
+                value=float(existing_room.get("initial_co2_ppm", 420.0)),
+                key=f"initial_co2_{room_index}",
+            ),
+            "initial_occupancy": st.number_input(
+                "Initial occupancy",
+                min_value=0,
+                value=int(existing_room.get("initial_occupancy", 0)),
+                step=1,
+                key=f"initial_occupancy_{room_index}",
+            ),
+        })
+
+if st.sidebar.button("Apply Building Configuration"):
+    configuration_response = requests.post(
+        f"{API_URL}/building_config",
+        json={
+            "location_id": location["location_id"],
+            "building_id": active_config.get(
+                "building_id",
+                "default_building",
+            ),
+            "rooms": room_requests,
+        },
+        timeout=5,
+    )
+
+    if configuration_response.status_code == 200:
+        st.sidebar.success("Building configuration applied.")
+        st.rerun()
+
+    st.sidebar.error(configuration_response.text)
+
 zone_id = st.sidebar.selectbox(
-    "Select Zone",
-    ["room_a", "room_b"],
+    "Select Room",
+    [room["room_id"] for room in active_config.get("rooms", [])],
 )
 
 if st.sidebar.button("🔄 Refresh"):
@@ -141,6 +317,16 @@ st.divider()
 
 st.subheader("🎛️ Manual HVAC Control")
 
+selected_room_config = next(
+    room
+    for room in active_config.get("rooms", [])
+    if room["room_id"] == zone_id
+)
+
+hvac_capacity_w = int(
+    selected_room_config["hvac_capacity_w"]
+)
+
 st.caption(
     "Use this to demonstrate how the Digital Twin responds "
     "to HVAC actions."
@@ -148,10 +334,10 @@ st.caption(
 
 hvac_power = st.slider(
     "HVAC Power (W)",
-    min_value=-2000,
-    max_value=2000,
+    min_value=-hvac_capacity_w,
+    max_value=hvac_capacity_w,
     value=0,
-    step=500,
+    step=max(1, min(500, hvac_capacity_w)),
 )
 
 if hvac_power < 0:

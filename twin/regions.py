@@ -1,15 +1,13 @@
-"""
-Regional configuration for the HVAC Digital Twin.
-
-Person 01: Twin Engineer
-"""
+"""Backward-compatible region access backed by location metadata."""
 
 from dataclasses import dataclass
+
+from .location_config import LOCATIONS, LocationConfig, get_location
 
 
 @dataclass(frozen=True)
 class Region:
-    """Geographic configuration for a simulation region."""
+    """Legacy geographic shape retained for existing callers."""
 
     name: str
     latitude: float
@@ -17,16 +15,12 @@ class Region:
 
 
 REGIONS = {
-    "chennai": Region(
-        name="Chennai",
-        latitude=13.0827,
-        longitude=80.2707,
-    ),
-    "delhi": Region(
-        name="Delhi",
-        latitude=28.6139,
-        longitude=77.2090,
-    ),
+    location_id: Region(
+        name=location.name,
+        latitude=location.latitude,
+        longitude=location.longitude,
+    )
+    for location_id, location in LOCATIONS.items()
 }
 
 
@@ -35,12 +29,5 @@ def get_region(region_id: str) -> Region:
     Get a region by its ID.
     """
 
-    region_id = region_id.lower()
-
-    if region_id not in REGIONS:
-        raise ValueError(
-            f"Unknown region: {region_id}. "
-            f"Available regions: {list(REGIONS.keys())}"
-        )
-
-    return REGIONS[region_id]
+    location = get_location(region_id)
+    return REGIONS[location.location_id]

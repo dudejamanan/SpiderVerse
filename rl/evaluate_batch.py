@@ -47,18 +47,11 @@ def main() -> None:
                 info,
             ) = env.step(action)
 
-            # One step = one hour.
-            energy_draw_kw = float(
+            energy_kwh += float(
                 info.get(
-                    "energy_draw_kw",
+                    "energy_draw_kwh",
                     0.0,
                 )
-            )
-
-            energy_kwh += (
-                energy_draw_kw
-                * env.TIMESTEP_SECONDS
-                / 3600.0
             )
 
             total_abs_pmv += abs(

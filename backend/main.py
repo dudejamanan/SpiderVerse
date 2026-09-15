@@ -1,10 +1,12 @@
 from fastapi import FastAPI, HTTPException
 
-from contracts import FeedbackRequest, RegionRequest, TwinState,LLMConstraint, RLAction
+from contracts import FeedbackRequest, RegionRequest, TwinState, LLMConstraint, RLAction
 from backend.store import store
 
 from rl.agent import HVACAgent
-from twin.room_twin import RoomTwin
+from rl.hvac_env import HVACEnv
+from twin.building_config import BuildingConfig, RoomConfig
+from twin.building_twin import BuildingTwin
 
 from rl.hvac_controller import calculate_hvac_action
 
@@ -13,10 +15,39 @@ from nlp.llm_parser import (
     ClarificationResponse,
 )
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from twin.location_config import get_location, list_locations
 
 class ComfortConfirmation(BaseModel):
     comfortable: bool
+
+
+class RoomConfigurationRequest(BaseModel):
+    room_id: str
+    area_m2: float = 30.0
+    height_m: float = 3.0
+    window_area_m2: float = 5.0
+    R: float = 2.0
+    C: float = 156_000.0
+    shading_coefficient: float = 0.5
+    ventilation_ach: float = 1.5
+    hvac_capacity_w: float = 2_000.0
+    cop: float = 3.5
+    initial_temp_c: float = 24.0
+    initial_rh_pct: float = 50.0
+    initial_co2_ppm: float = 420.0
+    initial_occupancy: int = 0
+
+
+class BuildingConfigurationRequest(BaseModel):
+    location_id: str
+    building_id: str = "default_building"
+    rooms: list[RoomConfigurationRequest] = Field(
+        default_factory=lambda: [
+            RoomConfigurationRequest(room_id="room_0")
+        ]
+    )
 
 app = FastAPI(
     title="Digital Twin HVAC Optimizer",
@@ -26,30 +57,46 @@ app = FastAPI(
 
 
 # --------------------------------------------------
-# Demo Twin
+# Configurable Digital Twin
 # --------------------------------------------------
 
-twins = {
-    "room_a": RoomTwin(
-        zone_id="room_a",
-        region_id="chennai",
-        initial_temp_c=24.0,
-    ),
-    "room_b": RoomTwin(
-        zone_id="room_b",
-        region_id="chennai",
-        initial_temp_c=24.0,
-    ),
-}
+active_location_id = "chennai"
 
-def get_twin(zone_id: str) -> RoomTwin:
-    if zone_id not in twins:
+
+def build_twin(
+    location_id: str,
+    building_id: str,
+    rooms: list[RoomConfigurationRequest],
+) -> BuildingTwin:
+    location = get_location(location_id)
+
+    return BuildingTwin(
+        BuildingConfig(
+            building_id=building_id,
+            latitude=location.latitude,
+            longitude=location.longitude,
+            rooms=[
+                RoomConfig(**room.model_dump())
+                for room in rooms
+            ],
+        )
+    )
+
+
+building = build_twin(
+    location_id=active_location_id,
+    building_id="default_building",
+    rooms=[RoomConfigurationRequest(room_id="room_0")],
+)
+
+def get_twin(zone_id: str):
+    try:
+        return building.get_room(zone_id)
+    except ValueError:
         raise HTTPException(
             status_code=404,
             detail=f"Zone not found: {zone_id}",
         )
-
-    return twins[zone_id]
 
 
 
@@ -58,6 +105,7 @@ def get_twin(zone_id: str) -> RoomTwin:
 # --------------------------------------------------
 
 agent = None
+SIMULATION_DT_SECONDS = HVACEnv.DEFAULT_SIMULATION_DT_SECONDS
 
 
 # --------------------------------------------------
@@ -79,6 +127,48 @@ def health():
 @app.get("/history")
 def get_history():
     return store.get_history()
+
+
+@app.get("/building_config")
+def get_building_config():
+    config = building.get_config()
+    location = get_location(active_location_id)
+    config["location"] = {
+        "location_id": location.location_id,
+        "name": location.name,
+        "country": location.country,
+        "latitude": location.latitude,
+        "longitude": location.longitude,
+    }
+    return config
+
+
+@app.get("/locations")
+def get_locations():
+    return list_locations()
+
+
+@app.post("/building_config")
+def configure_building(request: BuildingConfigurationRequest):
+    global active_location_id, building
+
+    try:
+        new_building = build_twin(
+            location_id=request.location_id,
+            building_id=request.building_id,
+            rooms=request.rooms,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+    active_location_id = request.location_id.strip().lower()
+    building = new_building
+
+    store.constraints.clear()
+    store.twin_states.clear()
+    store.actions.clear()
+
+    return get_building_config()
 
 
 # --------------------------------------------------
@@ -199,15 +289,22 @@ def test_optimize(zone_id: str):
 
     actual_delta = new_setpoint - twin.current_setpoint_c
 
-    # Convert setpoint change → HVAC power
-    hvac_power_w = actual_delta * 1000.0
+    hvac_capacity_w = float(
+        twin.config.hvac_capacity_w
+    )
+
+    hvac_power_w = calculate_hvac_action(
+        indoor_temp_c=twin.indoor_temp_c,
+        target_setpoint_c=new_setpoint,
+        max_hvac_power_w=hvac_capacity_w,
+    )
 
     # Update Twin setpoint
     twin.current_setpoint_c = new_setpoint
 
     # Apply HVAC action
     new_state = twin.step(
-        dt=300.0,
+        dt=SIMULATION_DT_SECONDS,
         hvac_action=hvac_power_w,
         occupancy_count=twin.occupancy_count,
     )
@@ -224,6 +321,8 @@ def test_optimize(zone_id: str):
         "constraint": constraint.model_dump(),
         "action": action,
         "hvac_power_w": hvac_power_w,
+        "hvac_capacity_w": hvac_capacity_w,
+        "simulation_dt_seconds": SIMULATION_DT_SECONDS,
         "new_state": new_state.model_dump(),
     })
 
@@ -280,9 +379,9 @@ def test_hvac(zone_id: str, hvac_power_w: float):
     # Get current state
     old_state = twin.get_state()
 
-    # Apply HVAC action for one timestep
+    # Apply HVAC action for one configured timestep.
     new_state = twin.step(
-        dt=1.0,
+        dt=SIMULATION_DT_SECONDS,
         hvac_action=hvac_power_w,
         occupancy_count=twin.occupancy_count,
     )
@@ -295,6 +394,12 @@ def test_hvac(zone_id: str, hvac_power_w: float):
         "zone_id": zone_id,
         "type": "manual_test",
         "hvac_power_w": hvac_power_w,
+        "simulation_dt_seconds": SIMULATION_DT_SECONDS,
+        "energy_draw_kwh": (
+            new_state.energy_draw_kw
+            * SIMULATION_DT_SECONDS
+            / 3600.0
+        ),
         "old_state": old_state,
         "new_state": new_state,
     })
@@ -344,18 +449,40 @@ def optimize(zone_id: str):
     )
 
     action = RLAction(**action)
-    # 5. Convert setpoint change → HVAC power
+    # 5. Convert setpoint change -> room-specific HVAC power
+    hvac_capacity_w = float(
+        getattr(
+            getattr(twin, "config", None),
+            "hvac_capacity_w",
+            2000.0,
+        )
+    )
+
     hvac_power_w = calculate_hvac_action(
         indoor_temp_c=state.indoor_temp_c,
         target_setpoint_c=action.new_setpoint_c,
+        max_hvac_power_w=hvac_capacity_w,
+    )
+
+    hvac_power_w = float(
+        max(
+            -hvac_capacity_w,
+            min(hvac_capacity_w, hvac_power_w),
+        )
     )
 
     twin.current_setpoint_c = action.new_setpoint_c
 
     new_state = twin.step(
-        dt=3600.0,
+        dt=SIMULATION_DT_SECONDS,
         hvac_action=hvac_power_w,
         occupancy_count=twin.occupancy_count,
+    )
+
+    energy_draw_kwh = (
+        new_state.energy_draw_kw
+        * SIMULATION_DT_SECONDS
+        / 3600.0
     )
 
     # 8. Store action and state
@@ -370,6 +497,9 @@ def optimize(zone_id: str):
         "constraint": constraint.model_dump(),
         "action": action.model_dump(),
         "hvac_power_w": hvac_power_w,
+        "hvac_capacity_w": hvac_capacity_w,
+        "simulation_dt_seconds": SIMULATION_DT_SECONDS,
+        "energy_draw_kwh": energy_draw_kwh,
         "new_state": new_state.model_dump(),
     })
 
@@ -384,6 +514,9 @@ def optimize(zone_id: str):
         "constraint": constraint.model_dump(),
         "action": action.model_dump(),
         "hvac_power_w": hvac_power_w,
+        "hvac_capacity_w": hvac_capacity_w,
+        "simulation_dt_seconds": SIMULATION_DT_SECONDS,
+        "energy_draw_kwh": energy_draw_kwh,
         "new_state": new_state,
         "ask_confirmation": True,
         "confirmation_question": "Is the room comfortable now?",
