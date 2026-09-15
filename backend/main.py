@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException
 
+from fastapi.middleware.cors import CORSMiddleware
+
 from contracts import FeedbackRequest, RegionRequest, TwinState, LLMConstraint, RLAction
 from backend.store import store
 
@@ -55,7 +57,16 @@ app = FastAPI(
     version="1.0.0",
 )
 
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5174",
+        "http://localhost:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 # --------------------------------------------------
 # Configurable Digital Twin
 # --------------------------------------------------
