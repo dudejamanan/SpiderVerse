@@ -1,3 +1,4 @@
+
 # rl/reward.py
 
 from __future__ import annotations
@@ -23,6 +24,23 @@ class RewardWeights:
     gamma: float = 1.0
 
 
+def _get_state_value(state: Any, key: str) -> Any:
+    """
+    Read a value from either:
+
+    1. A dictionary-based twin state
+    2. An object/dataclass-based twin state
+
+    This keeps the reward function independent
+    of the final RoomTwin implementation.
+    """
+
+    if isinstance(state, dict):
+        return state[key]
+
+    return getattr(state, key)
+
+
 def calculate_pmv(
     indoor_temp_c: float,
     indoor_rh_pct: float,
@@ -33,22 +51,6 @@ def calculate_pmv(
     Calculate Predicted Mean Vote (PMV).
 
     Uses pythermalcomfort's ISO 7730 implementation.
-
-    Parameters
-    ----------
-    indoor_temp_c:
-        Indoor air temperature in Celsius.
-
-    indoor_rh_pct:
-        Indoor relative humidity in percent.
-
-    clo:
-        Clothing insulation.
-        0.5 is a reasonable summer-office assumption.
-
-    met:
-        Metabolic rate.
-        1.2 is a reasonable seated-office assumption.
     """
 
     result = pmv_ppd_iso(
@@ -72,6 +74,7 @@ def constraint_is_satisfied(
     the human's temperature constraint.
 
     Currently supports:
+
         parameter = "temperature"
         direction = "increase"
         direction = "decrease"
@@ -86,12 +89,14 @@ def constraint_is_satisfied(
     if parameter != "temperature":
         return False
 
-    indoor_temp = float(state.indoor_temp_c)
+    indoor_temp = float(
+        _get_state_value(state, "indoor_temp_c")
+    )
 
     # Initial comfort target.
     target_temp = 24.0
 
-    # Small tolerance so that the agent isn't forced
+    # Small tolerance so the agent does not need
     # to hit exactly 24.0 C.
     tolerance = 0.5
 
@@ -136,27 +141,33 @@ def compute_reward(
     # ---------------------------------------------------------
 
     pmv = calculate_pmv(
-        indoor_temp_c=float(state.indoor_temp_c),
-        indoor_rh_pct=float(state.indoor_rh_pct),
-        clo=0.5,
-        met=1.2,
+        indoor_temp_c=float(
+            _get_state_value(state, "indoor_temp_c")
+        ),
+        indoor_rh_pct=float(
+            _get_state_value(state, "indoor_rh_pct")
+        ),
     )
 
-    comfort_penalty = -abs(pmv)
+    comfort_penalty = -weights.alpha * abs(pmv)
 
     # ---------------------------------------------------------
     # ENERGY
     # ---------------------------------------------------------
 
-    energy_penalty = -float(state.energy_draw_kw)
+    energy_draw_kw = float(
+        _get_state_value(state, "energy_draw_kw")
+    )
+
+    energy_penalty = -weights.beta * energy_draw_kw
 
     # ---------------------------------------------------------
     # HUMAN CONSTRAINT
     # ---------------------------------------------------------
 
     satisfied = constraint_is_satisfied(
-        state,
-        constraint or {},
+        state=state,
+        constraint=constraint,
     )
 
     constraint_bonus = (
@@ -166,12 +177,12 @@ def compute_reward(
     )
 
     # ---------------------------------------------------------
-    # TOTAL REWARD
+    # TOTAL
     # ---------------------------------------------------------
 
     reward = (
-        weights.alpha * comfort_penalty
-        + weights.beta * energy_penalty
+        comfort_penalty
+        + energy_penalty
         + constraint_bonus
     )
 
