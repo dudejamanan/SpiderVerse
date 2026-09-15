@@ -8,7 +8,11 @@ from datetime import datetime, timezone
 
 from twin.weather_client import get_current_weather
 
+from twin.baseline_schedule import get_baseline_setpoint
+
 from twin.regions import get_region
+
+from contracts import TwinState
 
 from twin.thermal_model import (
     ThermalParameters,
@@ -65,6 +69,22 @@ class RoomTwin:
 
         self.energy_draw_kw = 0.0
         self.current_setpoint_c = 24.0
+
+    def apply_baseline_schedule(
+        self,
+        hour: int,
+        occupancy_count: int,
+    ) -> float:
+        """
+        Apply the static baseline schedule and return its setpoint.
+        """
+
+        self.current_setpoint_c = get_baseline_setpoint(
+            hour=hour,
+            occupancy_count=occupancy_count,
+        )
+
+        return self.current_setpoint_c
 
     def update_weather(self) -> None:
         """
@@ -169,20 +189,21 @@ class RoomTwin:
 
         self.co2_ppm = max(420.0, self.co2_ppm)
 
-    def get_state(self) -> dict:
+    def get_state(self) -> TwinState:
         """
         Return the current state of the room.
         """
 
-        return {
-            "zone_id": self.zone_id,
-            "indoor_temp_c": self.indoor_temp_c,
-            "indoor_rh_pct": self.indoor_rh_pct,
-            "co2_ppm": self.co2_ppm,
-            "outdoor_temp_c": self.outdoor_temp_c,
-            "outdoor_rh_pct": self.outdoor_rh_pct,
-            "occupancy_count": self.occupancy_count,
-            "current_setpoint_c": self.current_setpoint_c,
-            "energy_draw_kw": self.energy_draw_kw,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
+        return TwinState(
+            zone_id=self.zone_id,
+            indoor_temp_c=self.indoor_temp_c,
+            indoor_rh_pct=self.indoor_rh_pct,
+            co2_ppm=self.co2_ppm,
+            outdoor_temp_c=self.outdoor_temp_c,
+            outdoor_rh_pct=self.outdoor_rh_pct,
+            occupancy_count=self.occupancy_count,
+            current_setpoint_c=self.current_setpoint_c,
+            energy_draw_kw=self.energy_draw_kw,
+            timestamp=datetime.now(timezone.utc),
+        )
+        

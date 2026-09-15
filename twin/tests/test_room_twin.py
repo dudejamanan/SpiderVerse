@@ -12,10 +12,10 @@ def test_room_twin_initial_state():
 
     state = twin.get_state()
 
-    assert state["zone_id"] == "room_a"
-    assert state["indoor_temp_c"] == 24.0
-    assert state["indoor_rh_pct"] == 50.0
-    assert state["co2_ppm"] == 420.0
+    assert state.zone_id == "room_a"
+    assert state.indoor_temp_c == 24.0
+    assert state.indoor_rh_pct == 50.0
+    assert state.co2_ppm == 420.0
 
 
 def test_room_twin_step_changes_state():
@@ -35,7 +35,7 @@ def test_room_twin_step_changes_state():
         occupancy_count=2,
     )
 
-    assert state["indoor_temp_c"] < initial_temp
-    assert state["occupancy_count"] == 2
-    assert state["co2_ppm"] > 420.0
-    assert state["energy_draw_kw"] == 2.0
+    assert state.indoor_temp_c < initial_temp
+    assert state.occupancy_count == 2
+    assert state.co2_ppm > 420.0
+    assert state.energy_draw_kw == 2.0
