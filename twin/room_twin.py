@@ -1,42 +1,43 @@
 """
 Room-level Digital Twin.
 
-Person 01 owns this module.
+Person 01: Twin Engineer
 """
 
 from datetime import datetime, timezone
 
-from twin.weather_client import get_current_weather
-
-from twin.baseline_schedule import get_baseline_setpoint
-
-from twin.regions import get_region
-
 from contracts import TwinState
 
+from twin.baseline_schedule import get_baseline_setpoint
+from twin.regions import get_region
 from twin.thermal_model import (
     ThermalParameters,
     calculate_next_temperature,
     calculate_occupancy_heat_gain,
     calculate_solar_heat_gain,
 )
+from twin.weather_client import get_current_weather
+from twin.zone_config import get_zone_config
 
 
 class RoomTwin:
     """
-    Digital twin representing one simulated room.
+    Digital twin representing one HVAC zone.
 
-    The current version focuses on the temperature RC model.
-    Humidity, CO2, weather API, and baseline control will be
-    added in the following steps.
+    The twin combines:
+    - RC thermal dynamics
+    - solar heat gain
+    - occupancy heat gain
+    - HVAC thermal power
+    - indoor humidity dynamics
+    - indoor CO2 dynamics
+    - real outdoor weather
+    - baseline HVAC scheduling
     """
 
     def __init__(
         self,
         zone_id: str,
-        R: float,
-        C: float,
-        window_area: float,
         region_id: str,
         initial_temp_c: float = 24.0,
     ):
@@ -48,23 +49,26 @@ class RoomTwin:
         self.latitude = region.latitude
         self.longitude = region.longitude
 
+        zone_config = get_zone_config(zone_id)
+        self.zone_config = zone_config
+
         self.thermal_params = ThermalParameters(
-            R=R,
-            C=C,
-            window_area_m2=window_area,
+            R=zone_config.R,
+            C=zone_config.C,
+            window_area_m2=zone_config.window_area_m2,
+            shading_coefficient=zone_config.shading_coefficient,
         )
 
         self.indoor_temp_c = initial_temp_c
 
-        # Temporary values for the temperature-only model.
-        # These will be replaced by the weather client later.
         self.outdoor_temp_c = 35.0
         self.outdoor_rh_pct = 50.0
         self.solar_radiation_w_m2 = 0.0
 
-        self.occupancy_count = 0    
         self.indoor_rh_pct = 50.0
-        self.co2_ppm = 420.0    
+        self.co2_ppm = 420.0
+
+        self.occupancy_count = 0
         self.hvac_action_w = 0.0
 
         self.energy_draw_kw = 0.0
@@ -75,9 +79,7 @@ class RoomTwin:
         hour: int,
         occupancy_count: int,
     ) -> float:
-        """
-        Apply the static baseline schedule and return its setpoint.
-        """
+        """Apply the static baseline schedule."""
 
         self.current_setpoint_c = get_baseline_setpoint(
             hour=hour,
@@ -87,18 +89,18 @@ class RoomTwin:
         return self.current_setpoint_c
 
     def update_weather(self) -> None:
-        """
-        Update the twin's outdoor conditions using Open-Meteo.
-        """
+        """Fetch and apply current outdoor weather."""
 
         weather = get_current_weather(
             latitude=self.latitude,
             longitude=self.longitude,
         )
 
-        self.outdoor_temp_c = weather["outdoor_temp_c"]
-        self.outdoor_rh_pct = weather["outdoor_rh_pct"]
-        self.solar_radiation_w_m2 = weather["solar_radiation_w_m2"]
+        self.set_weather(
+            outdoor_temp_c=weather["outdoor_temp_c"],
+            outdoor_rh_pct=weather["outdoor_rh_pct"],
+            solar_radiation_w_m2=weather["solar_radiation_w_m2"],
+        )
 
     def set_weather(
         self,
@@ -106,37 +108,32 @@ class RoomTwin:
         outdoor_rh_pct: float,
         solar_radiation_w_m2: float,
     ) -> None:
-        """
-        Set weather conditions directly.
-
-        Useful for deterministic simulations and tests.
-        """
+        """Set weather directly for deterministic simulation/testing."""
 
         self.outdoor_temp_c = outdoor_temp_c
         self.outdoor_rh_pct = outdoor_rh_pct
         self.solar_radiation_w_m2 = solar_radiation_w_m2
-
 
     def step(
         self,
         dt: float,
         hvac_action: float,
         occupancy_count: int,
-    ) -> dict:
+    ) -> TwinState:
         """
         Advance the digital twin by one timestep.
 
-        Parameters
-        ----------
-        dt:
-            Simulation timestep.
         hvac_action:
-            HVAC thermal power in watts.
+            Thermal HVAC power in watts.
             Negative = cooling.
             Positive = heating.
-        occupancy_count:
-            Number of people in the room.
         """
+
+        if dt <= 0:
+            raise ValueError("dt must be greater than zero.")
+
+        if occupancy_count < 0:
+            raise ValueError("occupancy_count cannot be negative.")
 
         self.hvac_action_w = hvac_action
         self.occupancy_count = occupancy_count
@@ -162,25 +159,53 @@ class RoomTwin:
             q_hvac_w=hvac_action,
         )
 
-        self.update_humidity()
+        self.update_humidity(dt)
         self.update_co2(dt)
 
-        # Simple energy representation for the current prototype.
-        self.energy_draw_kw = abs(hvac_action) / 1000.0
+        # hvac_action represents thermal power.
+        # Electrical power = thermal power / COP.
+        self.energy_draw_kw = (
+            abs(hvac_action)
+            / self.zone_config.cop
+            / 1000.0
+        )
 
         return self.get_state()
 
-
-    def update_humidity(self) -> None:
+    def update_humidity(self, dt: float) -> None:
         """
-        Simple indoor humidity response toward outdoor humidity.
+        Update indoor relative humidity using a simple
+        ventilation/dehumidification response.
+
+        Cooling introduces additional moisture removal.
         """
 
-        humidity_difference = (
+        ventilation_rate = (
+            self.zone_config.ventilation_ach / 3600.0
+        )
+
+        humidity_exchange = (
             self.outdoor_rh_pct - self.indoor_rh_pct
         )
 
-        self.indoor_rh_pct += 0.05 * humidity_difference
+        self.indoor_rh_pct += (
+            humidity_exchange
+            * ventilation_rate
+            * dt
+        )
+
+        # Cooling produces dehumidification.
+        if self.hvac_action_w < 0:
+            cooling_magnitude = abs(self.hvac_action_w)
+
+            dehumidification = (
+                cooling_magnitude
+                / 10000.0
+                * 0.5
+                * dt
+            )
+
+            self.indoor_rh_pct -= dehumidification
 
         self.indoor_rh_pct = max(
             20.0,
@@ -189,23 +214,45 @@ class RoomTwin:
 
     def update_co2(self, dt: float) -> None:
         """
-        Update indoor CO2 based on occupancy and ventilation.
-
-        Occupants add CO2 while ventilation removes some CO2.
+        Update indoor CO2 using a room-volume and ventilation model.
         """
 
-        co2_generation = self.occupancy_count * 20.0
+        room_volume = self.zone_config.volume_m3
 
-        ventilation_decay = (
-            self.co2_ppm - 420.0
-        ) * 0.02
+        ventilation_rate = (
+            self.zone_config.ventilation_ach
+            * room_volume
+            / 3600.0
+        )
+
+        outdoor_co2_ppm = 420.0
+
+        # Approximate CO2 generation by occupants.
+        co2_generation_lps = (
+            self.occupancy_count * 0.005
+        )
+
+        co2_generation_ppm_per_second = (
+            co2_generation_lps
+            / (room_volume * 1000.0)
+            * 1_000_000.0
+        )
+
+        ventilation_removal = (
+            self.co2_ppm - outdoor_co2_ppm
+        ) * (
+            ventilation_rate / room_volume
+        )
 
         self.co2_ppm += (
-            co2_generation - ventilation_decay
+            co2_generation_ppm_per_second
+            - ventilation_removal
         ) * dt
 
-        self.co2_ppm = max(420.0, self.co2_ppm)
-
+        self.co2_ppm = max(
+            outdoor_co2_ppm,
+            self.co2_ppm,
+        )
 
     def simulate(
         self,
@@ -214,29 +261,26 @@ class RoomTwin:
         hvac_action: float,
         occupancy_count: int,
     ) -> list[TwinState]:
-        """
-        Run the twin for a number of timesteps.
+        """Run the twin for multiple timesteps."""
 
-        Returns the state after every timestep.
-        """
+        if steps < 0:
+            raise ValueError("steps cannot be negative.")
 
         states = []
 
         for _ in range(steps):
-            state = self.step(
-                dt=dt,
-                hvac_action=hvac_action,
-                occupancy_count=occupancy_count,
+            states.append(
+                self.step(
+                    dt=dt,
+                    hvac_action=hvac_action,
+                    occupancy_count=occupancy_count,
+                )
             )
-
-            states.append(state)
 
         return states
 
     def get_state(self) -> TwinState:
-        """
-        Return the current state of the room.
-        """
+        """Return the current digital-twin state."""
 
         return TwinState(
             zone_id=self.zone_id,
@@ -250,4 +294,3 @@ class RoomTwin:
             energy_draw_kw=self.energy_draw_kw,
             timestamp=datetime.now(timezone.utc),
         )
-        
