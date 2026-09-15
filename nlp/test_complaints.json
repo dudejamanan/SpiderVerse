@@ -1,0 +1,82 @@
+[
+  {
+    "complaint": "The room is freezing",
+    "zone_id": "zone_1",
+    "expected_parameter": "temperature",
+    "expected_direction": "increase",
+    "expected_intensity": "strong"
+  },
+  {
+    "complaint": "It's a little too warm in here",
+    "zone_id": "zone_1",
+    "expected_parameter": "temperature",
+    "expected_direction": "decrease",
+    "expected_intensity": "slight"
+  },
+  {
+    "complaint": "Can you make the room cooler?",
+    "zone_id": "zone_2",
+    "expected_parameter": "temperature",
+    "expected_direction": "decrease",
+    "expected_intensity": "moderate"
+  },
+  {
+    "complaint": "I'm feeling extremely hot",
+    "zone_id": "zone_2",
+    "expected_parameter": "temperature",
+    "expected_direction": "decrease",
+    "expected_intensity": "strong"
+  },
+  {
+    "complaint": "The air feels a little humid",
+    "zone_id": "zone_3",
+    "expected_parameter": "humidity",
+    "expected_direction": "decrease",
+    "expected_intensity": "slight"
+  },
+  {
+    "complaint": "It's really humid and uncomfortable",
+    "zone_id": "zone_3",
+    "expected_parameter": "humidity",
+    "expected_direction": "decrease",
+    "expected_intensity": "strong"
+  },
+  {
+    "complaint": "The air is too dry",
+    "zone_id": "zone_1",
+    "expected_parameter": "humidity",
+    "expected_direction": "increase",
+    "expected_intensity": "moderate"
+  },
+  {
+    "complaint": "This room feels stuffy",
+    "zone_id": "zone_2",
+    "expected_parameter": "airflow",
+    "expected_direction": "increase",
+    "expected_intensity": "moderate"
+  },
+  {
+    "complaint": "There isn't enough air circulation",
+    "zone_id": "zone_3",
+    "expected_parameter": "airflow",
+    "expected_direction": "increase",
+    "expected_intensity": "moderate"
+  },
+  {
+    "complaint": "The air is blowing too strongly on me",
+    "zone_id": "zone_1",
+    "expected_parameter": "airflow",
+    "expected_direction": "decrease",
+    "expected_intensity": "moderate"
+  },
+  {
+    "complaint": "My WiFi is extremely slow",
+    "zone_id": "zone_1",
+    "expected_clarification": true
+  },
+  {
+    "complaint": "Something feels wrong but I don't know what",
+    "zone_id": "zone_2",
+    "expected_clarification": true
+  }
+]
