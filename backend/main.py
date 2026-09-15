@@ -114,6 +114,76 @@ def submit_feedback(feedback: FeedbackRequest):
         "constraint": constraint.model_dump(),
     }
 
+
+
+@app.post("/test_optimize/{zone_id}")
+def test_optimize(zone_id: str):
+
+    twin = get_twin(zone_id)
+
+    # Get the NLP constraint
+    constraint = store.get_constraint(zone_id)
+
+    if constraint is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No HVAC constraint available. Submit feedback first.",
+        )
+
+    # --------------------------------------------------
+    # MOCK RL ACTION
+    # --------------------------------------------------
+    if constraint.direction == "decrease":
+        delta = -1.0
+    else:
+        delta = 1.0
+
+    new_setpoint = max(
+        17.0,
+        min(
+            29.0,
+            twin.current_setpoint_c + delta
+        )
+    )
+
+    actual_delta = new_setpoint - twin.current_setpoint_c
+
+    # Convert setpoint change → HVAC power
+    hvac_power_w = actual_delta * 1000.0
+
+    # Update Twin setpoint
+    twin.current_setpoint_c = new_setpoint
+
+    # Apply HVAC action
+    new_state = twin.step(
+        dt=300.0,
+        hvac_action=hvac_power_w,
+        occupancy_count=twin.occupancy_count,
+    )
+
+    # Store action
+    action = {
+        "zone_id": zone_id,
+        "setpoint_delta_c": actual_delta,
+        "new_setpoint_c": new_setpoint,
+    }
+
+    store.add_history({
+        "zone_id": zone_id,
+        "constraint": constraint.model_dump(),
+        "action": action,
+        "hvac_power_w": hvac_power_w,
+        "new_state": new_state.model_dump(),
+    })
+
+    store.save_twin_state(new_state)
+
+    return {
+        "constraint": constraint.model_dump(),
+        "action": action,
+        "hvac_power_w": hvac_power_w,
+        "new_state": new_state,
+    }
 # --------------------------------------------------
 # Region
 # --------------------------------------------------
