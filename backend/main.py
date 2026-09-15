@@ -6,10 +6,17 @@ from backend.store import store
 from rl.agent import HVACAgent
 from twin.room_twin import RoomTwin
 
+from rl.hvac_controller import calculate_hvac_action
+
 from nlp.llm_parser import (
     parse_complaint_with_context,
     ClarificationResponse,
 )
+
+from pydantic import BaseModel
+
+class ComfortConfirmation(BaseModel):
+    comfortable: bool
 
 app = FastAPI(
     title="Digital Twin HVAC Optimizer",
@@ -80,21 +87,17 @@ def get_history():
 
 @app.post("/submit_feedback")
 def submit_feedback(feedback: FeedbackRequest):
-
-    # 1. Parse natural-language feedback
     result = parse_complaint_with_context(
         raw_text=feedback.text,
         existing_zone=feedback.zone_id,
     )
 
-    # 2. If NLP cannot understand the complaint
     if isinstance(result, ClarificationResponse):
         return {
             "clarification_needed": True,
             "message": result.message,
         }
 
-    # 3. Convert P3 parser output → project LLMConstraint
     constraint = LLMConstraint(
         zone_id=feedback.zone_id,
         parameter=result.parameter,
@@ -104,16 +107,64 @@ def submit_feedback(feedback: FeedbackRequest):
         raw_text=feedback.text,
     )
 
-    # 4. Save constraint for RL agent
     store.save_constraint(constraint)
 
-    # 5. Return parsed result
+    conversation = store.get_conversation(feedback.zone_id)
+
+    if conversation is None:
+        store.start_conversation(feedback.zone_id)
+    else:
+        store.update_conversation(
+            feedback.zone_id,
+            active=True,
+            iteration=conversation.get("iteration", 1),
+        )
+
     return {
         "message": "Feedback parsed successfully",
         "clarification_needed": False,
         "constraint": constraint.model_dump(),
+        "ready_for_optimization": True,
     }
 
+
+@app.post("/confirm/{zone_id}")
+def confirm_comfort(
+    zone_id: str,
+    confirmation: ComfortConfirmation,
+):
+    get_twin(zone_id)
+
+    conversation = store.get_conversation(zone_id)
+
+    if conversation is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No active conversation for this zone.",
+        )
+
+    if confirmation.comfortable:
+        store.end_conversation(zone_id)
+
+        return {
+            "message": "Comfort achieved. HVAC optimization complete.",
+            "conversation_active": False,
+        }
+
+    iteration = conversation.get("iteration", 1) + 1
+
+    store.update_conversation(
+        zone_id,
+        active=True,
+        iteration=iteration,
+    )
+
+    return {
+        "message": "Please provide additional feedback.",
+        "conversation_active": True,
+        "iteration": iteration,
+        "ask_feedback": True,
+    }
 
 
 @app.post("/test_optimize/{zone_id}")
@@ -178,11 +229,19 @@ def test_optimize(zone_id: str):
 
     store.save_twin_state(new_state)
 
+    store.update_conversation(
+        zone_id,
+        last_constraint=constraint.model_dump(),
+        last_action=action,
+    )
+
     return {
         "constraint": constraint.model_dump(),
         "action": action,
         "hvac_power_w": hvac_power_w,
         "new_state": new_state,
+        "ask_confirmation": True,
+        "confirmation_question": "Is the room comfortable now?",
     }
 # --------------------------------------------------
 # Region
@@ -284,15 +343,17 @@ def optimize(zone_id: str):
         constraint.model_dump(),
     )
 
+    action = RLAction(**action)
     # 5. Convert setpoint change → HVAC power
-    hvac_power_w = action["setpoint_delta_c"] * 1000.0
+    hvac_power_w = calculate_hvac_action(
+        indoor_temp_c=state.indoor_temp_c,
+        target_setpoint_c=action.new_setpoint_c,
+    )
 
-    # 6. Update Twin setpoint
-    twin.current_setpoint_c = action["new_setpoint_c"]
+    twin.current_setpoint_c = action.new_setpoint_c
 
-    # 7. Apply HVAC action to Twin
     new_state = twin.step(
-        dt=1.0,
+        dt=3600.0,
         hvac_action=hvac_power_w,
         occupancy_count=twin.occupancy_count,
     )
@@ -307,17 +368,25 @@ def optimize(zone_id: str):
     store.add_history({
         "zone_id": zone_id,
         "constraint": constraint.model_dump(),
-        "action": action,
+        "action": action.model_dump(),
         "hvac_power_w": hvac_power_w,
-        "state": new_state,
+        "new_state": new_state.model_dump(),
     })
+
+    store.update_conversation(
+        zone_id,
+        last_constraint=constraint.model_dump(),
+        last_action=action.model_dump(),
+    )
 
     # 10. Return complete result
     return {
         "constraint": constraint.model_dump(),
-        "action": action,
+        "action": action.model_dump(),
         "hvac_power_w": hvac_power_w,
         "new_state": new_state,
+        "ask_confirmation": True,
+        "confirmation_question": "Is the room comfortable now?",
     }
 
 @app.post("/test_constraint/{zone_id}")
