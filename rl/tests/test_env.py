@@ -167,7 +167,7 @@ def test_room_twin_reset_and_simulated_time():
         occupancy_count=2,
     )
 
-def test_env_advances_one_hour():
+def test_env_advances_one_simulation_interval():
     from twin.room_twin import RoomTwin
     from rl.hvac_env import HVACEnv
 
@@ -193,4 +193,5 @@ def test_env_advances_one_hour():
 
     state = twin.get_state()
 
-    assert state.timestamp.hour == 9
+    assert state.timestamp.hour == 8
+    assert state.timestamp.minute == 15

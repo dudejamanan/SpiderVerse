@@ -104,13 +104,10 @@ def evaluate() -> None:
             )
         )
 
-        # One environment step =
-        # one simulated hour.
-        energy_kwh = (
-            energy_draw_kw
-            * (
-                env.TIMESTEP_SECONDS
-                / 3600.0
+        energy_kwh = float(
+            info.get(
+                "energy_draw_kwh",
+                0.0,
             )
         )
 

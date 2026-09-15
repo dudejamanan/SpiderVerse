@@ -1,9 +1,10 @@
 from fastapi import FastAPI, HTTPException
 
-from contracts import FeedbackRequest, RegionRequest, TwinState,LLMConstraint, RLAction
+from contracts import FeedbackRequest, RegionRequest, TwinState, LLMConstraint, RLAction
 from backend.store import store
 
 from rl.agent import HVACAgent
+from rl.hvac_env import HVACEnv
 from twin.room_twin import RoomTwin
 
 from rl.hvac_controller import calculate_hvac_action
@@ -58,6 +59,7 @@ def get_twin(zone_id: str) -> RoomTwin:
 # --------------------------------------------------
 
 agent = None
+SIMULATION_DT_SECONDS = HVACEnv.DEFAULT_SIMULATION_DT_SECONDS
 
 
 # --------------------------------------------------
@@ -344,18 +346,40 @@ def optimize(zone_id: str):
     )
 
     action = RLAction(**action)
-    # 5. Convert setpoint change → HVAC power
+    # 5. Convert setpoint change -> room-specific HVAC power
+    hvac_capacity_w = float(
+        getattr(
+            getattr(twin, "config", None),
+            "hvac_capacity_w",
+            2000.0,
+        )
+    )
+
     hvac_power_w = calculate_hvac_action(
         indoor_temp_c=state.indoor_temp_c,
         target_setpoint_c=action.new_setpoint_c,
+        max_hvac_power_w=hvac_capacity_w,
+    )
+
+    hvac_power_w = float(
+        max(
+            -hvac_capacity_w,
+            min(hvac_capacity_w, hvac_power_w),
+        )
     )
 
     twin.current_setpoint_c = action.new_setpoint_c
 
     new_state = twin.step(
-        dt=3600.0,
+        dt=SIMULATION_DT_SECONDS,
         hvac_action=hvac_power_w,
         occupancy_count=twin.occupancy_count,
+    )
+
+    energy_draw_kwh = (
+        new_state.energy_draw_kw
+        * SIMULATION_DT_SECONDS
+        / 3600.0
     )
 
     # 8. Store action and state
@@ -370,6 +394,9 @@ def optimize(zone_id: str):
         "constraint": constraint.model_dump(),
         "action": action.model_dump(),
         "hvac_power_w": hvac_power_w,
+        "hvac_capacity_w": hvac_capacity_w,
+        "simulation_dt_seconds": SIMULATION_DT_SECONDS,
+        "energy_draw_kwh": energy_draw_kwh,
         "new_state": new_state.model_dump(),
     })
 
@@ -384,6 +411,9 @@ def optimize(zone_id: str):
         "constraint": constraint.model_dump(),
         "action": action.model_dump(),
         "hvac_power_w": hvac_power_w,
+        "hvac_capacity_w": hvac_capacity_w,
+        "simulation_dt_seconds": SIMULATION_DT_SECONDS,
+        "energy_draw_kwh": energy_draw_kwh,
         "new_state": new_state,
         "ask_confirmation": True,
         "confirmation_question": "Is the room comfortable now?",
