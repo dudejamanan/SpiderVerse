@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 
 from twin.weather_client import get_current_weather
 
+from twin.regions import get_region
+
 from twin.thermal_model import (
     ThermalParameters,
     calculate_next_temperature,
@@ -31,14 +33,16 @@ class RoomTwin:
         R: float,
         C: float,
         window_area: float,
-        latitude: float,
-        longitude: float,
+        region_id: str,
         initial_temp_c: float = 24.0,
     ):
         self.zone_id = zone_id
 
-        self.latitude = latitude
-        self.longitude = longitude
+        region = get_region(region_id)
+
+        self.region_id = region_id
+        self.latitude = region.latitude
+        self.longitude = region.longitude
 
         self.thermal_params = ThermalParameters(
             R=R,
