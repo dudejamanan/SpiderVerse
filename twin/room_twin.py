@@ -100,6 +100,23 @@ class RoomTwin:
         self.outdoor_rh_pct = weather["outdoor_rh_pct"]
         self.solar_radiation_w_m2 = weather["solar_radiation_w_m2"]
 
+    def set_weather(
+        self,
+        outdoor_temp_c: float,
+        outdoor_rh_pct: float,
+        solar_radiation_w_m2: float,
+    ) -> None:
+        """
+        Set weather conditions directly.
+
+        Useful for deterministic simulations and tests.
+        """
+
+        self.outdoor_temp_c = outdoor_temp_c
+        self.outdoor_rh_pct = outdoor_rh_pct
+        self.solar_radiation_w_m2 = solar_radiation_w_m2
+
+
     def step(
         self,
         dt: float,
@@ -188,6 +205,33 @@ class RoomTwin:
         ) * dt
 
         self.co2_ppm = max(420.0, self.co2_ppm)
+
+
+    def simulate(
+        self,
+        steps: int,
+        dt: float,
+        hvac_action: float,
+        occupancy_count: int,
+    ) -> list[TwinState]:
+        """
+        Run the twin for a number of timesteps.
+
+        Returns the state after every timestep.
+        """
+
+        states = []
+
+        for _ in range(steps):
+            state = self.step(
+                dt=dt,
+                hvac_action=hvac_action,
+                occupancy_count=occupancy_count,
+            )
+
+            states.append(state)
+
+        return states
 
     def get_state(self) -> TwinState:
         """
