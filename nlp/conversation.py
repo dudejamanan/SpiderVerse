@@ -1,24 +1,23 @@
-
 from dataclasses import dataclass
 from typing import Optional
 
 from nlp.llm_parser import (
     HVACConstraint,
     ClarificationResponse,
-    parse_complaint_with_context,
+)
+
+from nlp.ml_parser import (
+    load_ml_parser,
+    parse_complaint_with_context as parse_with_ml,
 )
 
 
 # ============================================================
-# Conversation state
+# CONVERSATION STATE
 # ============================================================
 
 @dataclass
 class ConversationState:
-    """
-    Stores the current HVAC issue for one conversation.
-    """
-
     zone_id: Optional[str] = None
     parameter: Optional[str] = None
     direction: Optional[str] = None
@@ -27,158 +26,321 @@ class ConversationState:
     issue_active: bool = False
     awaiting_resolution: bool = False
 
+    raw_text: Optional[str] = None
+
 
 # ============================================================
-# Conversation manager
+# CONVERSATION MANAGER
 # ============================================================
 
 class ConversationManager:
 
     def __init__(self):
-        self.state = ConversationState()
 
-    # --------------------------------------------------------
-    # Reset conversation
-    # --------------------------------------------------------
-
-    def reset(self):
-        """
-        Clear the current issue and start a fresh conversation.
-        """
+        # Load the trained ML parser once when a conversation
+        # manager is created.
+        load_ml_parser()
 
         self.state = ConversationState()
 
-    # --------------------------------------------------------
-    # Store HVAC constraint
-    # --------------------------------------------------------
 
-    def store_constraint(
-        self,
-        constraint: HVACConstraint,
-    ):
-        """
-        Store the latest HVAC constraint.
-        """
+    # ========================================================
+    # PROCESS MESSAGE
+    # ========================================================
 
-        self.state.zone_id = constraint.zone_id
-        self.state.parameter = constraint.parameter
-        self.state.direction = constraint.direction
-        self.state.intensity = constraint.intensity
+    def process_message(self, message: str):
 
-        self.state.issue_active = True
-        self.state.awaiting_resolution = True
+        if not message or not message.strip():
 
-    # --------------------------------------------------------
-    # Parse message using existing conversation context
-    # --------------------------------------------------------
+            return {
+                "type": "clarification",
+                "reply": "Please describe the HVAC problem you are experiencing.",
+            }
 
-    def parse_with_context(self, message: str):
-        """
-        Send the new message to the parser together with
-        the information already stored in this conversation.
+        message = message.strip()
 
-        This allows messages such as:
+        # ----------------------------------------------------
+        # If we are waiting for the user to confirm whether
+        # the previous HVAC problem has been resolved.
+        # ----------------------------------------------------
 
-            "It is too cold now"
+        if self.state.awaiting_resolution:
 
-        to be understood as:
+            return self.handle_resolution(message)
 
-            Room 3 + temperature + increase
-        """
 
-        return parse_complaint_with_context(
-            raw_text=message,
-            existing_zone=self.state.zone_id,
-            existing_parameter=self.state.parameter,
-            existing_direction=self.state.direction,
-            existing_intensity=self.state.intensity,
+        # ----------------------------------------------------
+        # Parse the new complaint using our trained ML parser.
+        # ----------------------------------------------------
+
+        result = self.parse_message(message)
+
+
+        # ----------------------------------------------------
+        # If parser returned a complete HVAC constraint
+        # ----------------------------------------------------
+
+        if isinstance(result, HVACConstraint):
+
+            self.store_constraint(result)
+
+            constraint = self.build_constraint_from_state()
+
+            if constraint is None:
+
+                return {
+                    "type": "clarification",
+                    "reply": (
+                        "I understood the HVAC issue, but some "
+                        "information is still missing. Please provide "
+                        "the room or zone."
+                    ),
+                }
+
+            self.state.issue_active = True
+            self.state.awaiting_resolution = True
+
+            return {
+                "type": "constraint",
+                "reply": self.generate_constraint_reply(constraint),
+                "constraint": constraint.model_dump(),
+            }
+
+
+        # ----------------------------------------------------
+        # Parser needs clarification
+        # ----------------------------------------------------
+
+        if isinstance(result, ClarificationResponse):
+
+            return {
+                "type": "clarification",
+                "reply": result.message,
+            }
+
+
+        # ----------------------------------------------------
+        # Unexpected result
+        # ----------------------------------------------------
+
+        return {
+            "type": "error",
+            "reply": "I could not understand the HVAC request.",
+        }
+
+
+    # ========================================================
+    # PARSE MESSAGE USING ML
+    # ========================================================
+
+    def parse_message(self, message: str):
+
+        context = {
+            "zone_id": self.state.zone_id,
+            "parameter": self.state.parameter,
+            "direction": self.state.direction,
+            "intensity": self.state.intensity,
+        }
+
+        # Remove empty values from context.
+        context = {
+            key: value
+            for key, value in context.items()
+            if value is not None
+        }
+
+        try:
+
+            result = parse_with_ml(
+                message,
+                context,
+            )
+
+            return result
+
+        except Exception as error:
+
+            print(f"ML parser error: {error}")
+
+            return ClarificationResponse(
+                message=(
+                    "I could not understand the HVAC issue. "
+                    "Please describe whether the room is too hot, "
+                    "too cold, humid, dry, stuffy, or has too much airflow."
+                )
+            )
+
+
+    # ========================================================
+    # STORE CONSTRAINT
+    # ========================================================
+
+    def store_constraint(self, constraint: HVACConstraint):
+
+        if constraint.zone_id:
+            self.state.zone_id = constraint.zone_id
+
+        if constraint.parameter:
+            self.state.parameter = constraint.parameter
+
+        if constraint.direction:
+            self.state.direction = constraint.direction
+
+        if constraint.intensity:
+            self.state.intensity = constraint.intensity
+
+        if constraint.raw_text:
+
+            if self.state.raw_text:
+
+                self.state.raw_text += " " + constraint.raw_text.strip()
+
+            else:
+
+                self.state.raw_text = constraint.raw_text.strip()
+
+
+    # ========================================================
+    # BUILD FINAL HVAC CONSTRAINT
+    # ========================================================
+
+    def build_constraint_from_state(self):
+
+        # Every required field must be present before sending
+        # the constraint to the backend / RL controller.
+
+        if not self.state.zone_id:
+            return None
+
+        if not self.state.parameter:
+            return None
+
+        if not self.state.direction:
+            return None
+
+        if not self.state.intensity:
+            return None
+
+        return HVACConstraint(
+            zone_id=self.state.zone_id,
+            parameter=self.state.parameter,
+            direction=self.state.direction,
+            intensity=self.state.intensity,
+            confidence=0.90,
+            raw_text=self.state.raw_text or "",
         )
 
-    # --------------------------------------------------------
-    # Handle resolution response
-    # --------------------------------------------------------
+
+    # ========================================================
+    # GENERATE RESPONSE
+    # ========================================================
+
+    def generate_constraint_reply(self, constraint: HVACConstraint):
+
+        direction_text = {
+            "increase": "increase",
+            "decrease": "decrease",
+        }
+
+        parameter_text = {
+            "temperature": "temperature",
+            "humidity": "humidity",
+            "airflow": "airflow",
+        }
+
+        direction = direction_text.get(
+            constraint.direction,
+            constraint.direction,
+        )
+
+        parameter = parameter_text.get(
+            constraint.parameter,
+            constraint.parameter,
+        )
+
+        intensity = constraint.intensity
+
+        return (
+            f"I understood that you want the {parameter} "
+            f"in {constraint.zone_id} to {direction} "
+            f"with {intensity} intensity."
+        )
+
+
+    # ========================================================
+    # HANDLE RESOLUTION
+    # ========================================================
 
     def handle_resolution(self, message: str):
 
         normalized = message.strip().lower()
 
-        # ====================================================
-        # YES / PROBLEM RESOLVED
-        # ====================================================
+        # ----------------------------------------------------
+        # YES → ISSUE RESOLVED
+        # ----------------------------------------------------
 
         yes_words = {
             "yes",
+            "y",
             "yeah",
             "yep",
             "resolved",
             "fixed",
-            "fixed now",
-            "problem solved",
-            "solved",
-            "it is fixed",
-            "it's fixed",
+            "fine",
+            "okay",
+            "ok",
+            "good",
             "all good",
-            "good now",
-            "fine now",
+            "works",
+            "working",
         }
 
         if normalized in yes_words:
 
-            self.reset()
+            self.state.issue_active = False
+            self.state.awaiting_resolution = False
 
             return {
                 "type": "resolved",
                 "reply": (
-                    "Great! I'm glad the problem is resolved. "
-                    "How can I help you with anything else?"
+                    f"Great. The HVAC issue in "
+                    f"{self.state.zone_id} has been marked as resolved."
                 ),
             }
 
-        # ====================================================
-        # NO / PROBLEM NOT RESOLVED
-        # ====================================================
+
+        # ----------------------------------------------------
+        # NO → ISSUE STILL ACTIVE
+        # ----------------------------------------------------
 
         no_words = {
             "no",
+            "n",
             "nope",
-            "not yet",
-            "still",
-            "still hot",
-            "still cold",
-            "not fixed",
-            "not solved",
-            "problem remains",
             "not resolved",
+            "still bad",
+            "still not fixed",
+            "not fixed",
+            "not yet",
         }
 
         if normalized in no_words:
 
+            self.state.issue_active = True
             self.state.awaiting_resolution = False
 
             return {
-                "type": "continue",
+                "type": "clarification",
                 "reply": (
-                    f"Understood. The issue in "
-                    f"{self.state.zone_id} is still active. "
-                    "Please tell me what is still wrong or "
-                    "describe how the room feels now."
+                    "Please describe what is still wrong "
+                    "with the room."
                 ),
             }
 
-        # ====================================================
-        # AMBIGUOUS RESOLUTION RESPONSE
-        # ====================================================
-        #
-        # Examples:
-        #
-        # "maybe"
-        # "not sure"
-        # "I don't know"
-        #
-        # Since the system is currently waiting for a
-        # resolution answer, do NOT immediately interpret
-        # these as a new HVAC complaint.
-        # ====================================================
+
+        # ----------------------------------------------------
+        # AMBIGUOUS RESOLUTION
+        # ----------------------------------------------------
 
         ambiguous_resolution_words = {
             "maybe",
@@ -206,137 +368,51 @@ class ConversationManager:
                 ),
             }
 
-        # ====================================================
-        # USER GAVE A NEW HVAC DESCRIPTION
-        #
-        # Example:
-        #
-        # Previous:
-        # Room 3 is too hot
-        #
-        # User:
-        # It is too cold now
-        #
-        # Result:
-        # Room 3 + temperature + increase
-        # ====================================================
-
-        result = self.parse_with_context(message)
 
         # ----------------------------------------------------
-        # Successfully extracted new HVAC constraint
+        # USER MAY HAVE DESCRIBED A NEW PROBLEM INSTEAD
         # ----------------------------------------------------
+
+        result = self.parse_message(message)
 
         if isinstance(result, HVACConstraint):
 
             self.store_constraint(result)
 
-            return {
-                "type": "constraint",
-                "reply": (
-                    f"Understood. {result.zone_id} needs a "
-                    f"{result.direction} adjustment to "
-                    f"{result.parameter} with "
-                    f"{result.intensity} intensity. "
-                    "Is the problem resolved after this adjustment?"
-                ),
-                "constraint": result.model_dump(),
-            }
+            constraint = self.build_constraint_from_state()
+
+            if constraint is not None:
+
+                self.state.issue_active = True
+                self.state.awaiting_resolution = True
+
+                return {
+                    "type": "constraint",
+                    "reply": self.generate_constraint_reply(
+                        constraint
+                    ),
+                    "constraint": constraint.model_dump(),
+                }
+
 
         # ----------------------------------------------------
-        # Clarification required
-        # ----------------------------------------------------
-
-        if isinstance(result, ClarificationResponse):
-
-            return {
-                "type": "clarification",
-                "reply": result.message,
-            }
-
-        # ----------------------------------------------------
-        # Unexpected result
+        # STILL UNCLEAR
         # ----------------------------------------------------
 
         return {
-            "type": "error",
+            "type": "clarification",
             "reply": (
-                "I couldn't understand what is still wrong. "
-                "Please describe how the room feels now."
+                f"Is the problem in {self.state.zone_id} "
+                "resolved? Please answer yes or no, or "
+                "describe what is still wrong."
             ),
         }
 
-    # --------------------------------------------------------
-    # Process user message
-    # --------------------------------------------------------
 
-    def process_message(self, message: str):
-        """
-        Process one user message.
+    # ========================================================
+    # RESET CONVERSATION
+    # ========================================================
 
-        The conversation remembers previous information and
-        passes it to the parser for every new message.
-        """
+    def reset(self):
 
-        if not isinstance(message, str):
-            raise TypeError("Message must be a string.")
-
-        if not message.strip():
-            raise ValueError("Message cannot be empty.")
-
-        # ====================================================
-        # WAITING FOR RESOLUTION
-        # ====================================================
-
-        if self.state.awaiting_resolution:
-
-            return self.handle_resolution(message)
-
-        # ====================================================
-        # NORMAL HVAC MESSAGE
-        # ====================================================
-
-        result = self.parse_with_context(message)
-
-        # ====================================================
-        # CLARIFICATION REQUIRED
-        # ====================================================
-
-        if isinstance(result, ClarificationResponse):
-
-            return {
-                "type": "clarification",
-                "reply": result.message,
-            }
-
-        # ====================================================
-        # HVAC CONSTRAINT SUCCESSFULLY EXTRACTED
-        # ====================================================
-
-        if isinstance(result, HVACConstraint):
-
-            self.store_constraint(result)
-
-            return {
-                "type": "constraint",
-                "reply": (
-                    f"I understand that {result.zone_id} "
-                    f"needs a {result.direction} adjustment "
-                    f"to {result.parameter} with "
-                    f"{result.intensity} intensity. "
-                    "Is the problem resolved after the adjustment?"
-                ),
-                "constraint": result.model_dump(),
-            }
-
-        # ====================================================
-        # UNEXPECTED RESULT
-        # ====================================================
-
-        return {
-            "type": "error",
-            "reply": (
-                "I couldn't understand that request. "
-                "Please describe the HVAC problem again."
-            ),
-        }
+        self.state = ConversationState()
