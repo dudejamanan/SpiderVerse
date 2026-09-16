@@ -1,0 +1,95 @@
+text,zone_id,parameter,direction,intensity,source
+why is the bed room two so unbearably cold,zone_bedroom,temperature,increase,strong,template_heldout
+the kids bedroom feels hot,zone_bedroom,temperature,decrease,moderate,template_heldout
+the corridor feels too dry,zone_common,humidity,increase,moderate,template_heldout
+it's cold in the bed room two,zone_bedroom,temperature,increase,moderate,template_heldout
+why is the bathrooms so stuffy,zone_bathroom,airflow,increase,moderate,template_heldout
+it's slightly cool in the galley,zone_kitchen,temperature,increase,mild,template_heldout
+why is teh galley so too dry,zone_kitchen,humidity,increase,moderate,template_heldout
+why is the galley so bone dry,zone_kitchen,humidity,increase,strong,template_heldout
+why is the playroom so a bit stuffy,zone_living,airflow,increase,mild,template_heldout
+its way too drafty in the hall,zone_common,airflow,decrease,strong,template_heldout
+it's too humid in the playroom,zone_living,humidity,decrease,moderate,template_heldout
+it's too dry in the playroom,zone_living,humidity,increase,moderate,template_heldout
+the kids bedroom feels way too drafty,zone_bedroom,airflow,decrease,strong,template_heldout
+the kids bedroom feels a bit drafty,zone_bedroom,airflow,decrease,mild,template_heldout
+why is the corridor so way too drafty,zone_common,airflow,decrease,strong,template_heldout
+it's too humid in the bathrooms,zone_bathroom,humidity,decrease,moderate,template_heldout
+it's way too drafty in teh bathrooms,zone_bathroom,airflow,decrease,strong,template_heldout
+the bathrooms feels too humid,zone_bathroom,humidity,decrease,moderate,template_heldout
+the office feels too much air blowing,zone_office,airflow,decrease,moderate,template_heldout
+it's hot in the media room,zone_living,temperature,decrease,moderate,template_heldout
+why is the kids bedroom so too humid,zone_bedroom,humidity,decrease,moderate,template_heldout
+stuffy again,UNSPECIFIED,airflow,increase,moderate,template_heldout
+it's no air at all in here in the bed room two,zone_bedroom,airflow,increase,strong,template_heldout
+it's bone dry in the media room,zone_living,humidity,increase,strong,template_heldout
+the hall feels stuffy,zone_common,airflow,increase,moderate,template_heldout
+the media room feels a bit warm,zone_living,temperature,decrease,mild,template_heldout
+it's a bit stuffy in the bathrooms,zone_bathroom,airflow,increase,mild,template_heldout
+teh corridor feels too dry,zone_common,humidity,increase,moderate,template_heldout
+why is the media room so like an oven,zone_living,temperature,decrease,strong,template_heldout
+why is the corridor so hot,zone_common,temperature,decrease,moderate,template_heldout
+it's a bit dry in the bed room two,zone_bedroom,humidity,increase,mild,template_heldout
+why is the kids bedroom so unbearably cold,zone_bedroom,temperature,increase,strong,template_heldout
+it's like an oven in the bed room two,zone_bedroom,temperature,decrease,strong,template_heldout
+the bed room two feels too much air blowing,zone_bedroom,airflow,decrease,moderate,template_heldout
+the bathrooms feels too dry,zone_bathroom,humidity,increase,moderate,template_heldout
+the bathrooms feels like an oven,zone_bathroom,temperature,decrease,strong,template_heldout
+the office feels cold,zone_office,temperature,increase,moderate,template_heldout
+it's like an oven in the playroom,zone_living,temperature,decrease,strong,template_heldout
+why is the hall so hot,zone_common,temperature,decrease,moderate,template_heldout
+it's like an oven in the corridor,zone_common,temperature,decrease,strong,template_heldout
+its a bit warm in the bed room two,zone_bedroom,temperature,decrease,mild,template_heldout
+the corridor feels hot,zone_common,temperature,decrease,moderate,template_heldout
+the playroom feels too much air blowing,zone_living,airflow,decrease,moderate,template_heldout
+why is the corridor so slightly cool,zone_common,temperature,increase,mild,template_heldout
+why is the office so a bit warm,zone_office,temperature,decrease,mild,template_heldout
+it's too much air blowing in the bathrooms,zone_bathroom,airflow,decrease,moderate,template_heldout
+it's stuffy in the playroom,zone_living,airflow,increase,moderate,template_heldout
+it's a bit stuffy in the galley,zone_kitchen,airflow,increase,mild,template_heldout
+the playroom feels stuffy,zone_living,airflow,increase,moderate,template_heldout
+it's too dry in the office,zone_office,humidity,increase,moderate,template_heldout
+the galley feels way too drafty,zone_kitchen,airflow,decrease,strong,template_heldout
+why is the bathrooms so unbearably cold,zone_bathroom,temperature,increase,strong,template_heldout
+it's way too drafty in the galley,zone_kitchen,airflow,decrease,strong,template_heldout
+why is the bed room two so hot,zone_bedroom,temperature,decrease,moderate,template_heldout
+it's bone dry in the galley,zone_kitchen,humidity,increase,strong,template_heldout
+the hall feels bone dry,zone_common,humidity,increase,strong,template_heldout
+the kids bedroom feels a bit dry,zone_bedroom,humidity,increase,mild,template_heldout
+why is the playroom so like an oven,zone_living,temperature,decrease,strong,template_heldout
+the bathrooms feels slightly cool,zone_bathroom,temperature,increase,mild,template_heldout
+the bathrooms feels too humind,zone_bathroom,humidity,decrease,moderate,template_heldout
+teh office feels too much air blowing,zone_office,airflow,decrease,moderate,template_heldout
+why is the kids bedroom so hot,zone_bedroom,temperature,decrease,moderate,template_heldout
+its too humid in the office,zone_office,humidity,decrease,moderate,template_heldout
+the galley feels too humid,zone_kitchen,humidity,decrease,moderate,template_heldout
+it's a bit warm in the bed room two,zone_bedroom,temperature,decrease,mild,template_heldout
+it's way too drafty in the corridor,zone_common,airflow,decrease,strong,template_heldout
+it's too much air blowing in the media room,zone_living,airflow,decrease,moderate,template_heldout
+why is the office so too dry,zone_office,humidity,increase,moderate,template_heldout
+the office feels way too drafty,zone_office,airflow,decrease,strong,template_heldout
+the kids bedroom feels too much air blowing,zone_bedroom,airflow,decrease,moderate,template_heldout
+why is the bathrooms so like an oven,zone_bathroom,temperature,decrease,strong,template_heldout
+why is the bed room two so too humid,zone_bedroom,humidity,decrease,moderate,template_heldout
+the playroom feels too dry,zone_living,humidity,increase,moderate,template_heldout
+it's too humid in the kids bedroom,zone_bedroom,humidity,decrease,moderate,template_heldout
+teh galley feels way too humid,zone_kitchen,humidity,decrease,strong,template_heldout
+the hall feels too much air blowing,zone_common,airflow,decrease,moderate,template_heldout
+why is the media room so a bit warm,zone_living,temperature,decrease,mild,template_heldout
+it is way too humind now,UNSPECIFIED,humidity,decrease,strong,template_heldout
+why is the galley so slightly cool,zone_kitchen,temperature,increase,mild,template_heldout
+the media room feels slightly muggy,zone_living,humidity,decrease,mild,template_heldout
+it's a bit drafty in the bathrooms,zone_bathroom,airflow,decrease,mild,template_heldout
+the galley feels a bit warm,zone_kitchen,temperature,decrease,mild,template_heldout
+it's a bit drafty in the corridor,zone_common,airflow,decrease,mild,template_heldout
+it's too humid in the galley,zone_kitchen,humidity,decrease,moderate,template_heldout
+the kids bedroom feels a bit stuffy,zone_bedroom,airflow,increase,mild,template_heldout
+why is the bathrooms so hot,zone_bathroom,temperature,decrease,moderate,template_heldout
+why is the kids bedroom so no air at all in here,zone_bedroom,airflow,increase,strong,template_heldout
+its slightly cool in the corridor,zone_common,temperature,increase,mild,template_heldout
+the bed room two feels way too drafty,zone_bedroom,airflow,decrease,strong,template_heldout
+it's way too humid in the kids bedroom,zone_bedroom,humidity,decrease,strong,template_heldout
+why is the media room so no air at all in here,zone_living,airflow,increase,strong,template_heldout
+the bathrooms feels a bit dry,zone_bathroom,humidity,increase,mild,template_heldout
+why is the office so hot,zone_office,temperature,decrease,moderate,template_heldout
+the corridor feels slightly cool,zone_common,temperature,increase,mild,template_heldout

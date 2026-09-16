@@ -1,55 +1,173 @@
-const feedbackForm = document.getElementById("feedbackForm");
-const complaintInput = document.getElementById("complaint");
-const chat = document.getElementById("chat");
+// ============================================================
+// HVAC FEEDBACK FORM
+// Connects the frontend to the FastAPI NLP service
+// ============================================================
 
 
-function addMessage(sender, message) {
-    const messageElement = document.createElement("p");
+// ------------------------------------------------------------
+// API URL
+// ------------------------------------------------------------
 
-    messageElement.innerHTML =
-        `<strong>${sender}:</strong> ${message}`;
+const API_URL = "http://127.0.0.1:8000/nlp/chat";
 
-    chat.appendChild(messageElement);
 
-    chat.scrollTop = chat.scrollHeight;
+// ------------------------------------------------------------
+// Session ID
+// ------------------------------------------------------------
+
+// The backend uses a session ID to remember the conversation.
+//
+// We keep the same session ID while the user is interacting
+// with the feedback form.
+
+let sessionId = localStorage.getItem("hvac_session_id");
+
+
+// ------------------------------------------------------------
+// Get HTML elements
+// ------------------------------------------------------------
+
+const messageInput = document.getElementById("message");
+const sendButton = document.getElementById("send");
+const chatBox = document.getElementById("chat");
+
+
+// ------------------------------------------------------------
+// Create a session ID on the frontend if one does not exist
+// ------------------------------------------------------------
+
+if (!sessionId) {
+
+    sessionId = crypto.randomUUID();
+
+    localStorage.setItem(
+        "hvac_session_id",
+        sessionId
+    );
 }
 
 
-feedbackForm.addEventListener("submit", async function(event) {
+// ------------------------------------------------------------
+// Add a message to the chat window
+// ------------------------------------------------------------
 
-    event.preventDefault();
+function addMessage(sender, text) {
 
-    const complaint = complaintInput.value.trim();
+    const messageElement = document.createElement("div");
 
-    if (!complaint) {
+    messageElement.classList.add("message");
+
+    if (sender === "user") {
+
+        messageElement.classList.add("user-message");
+
+        messageElement.innerHTML = `
+            <strong>You:</strong> ${escapeHtml(text)}
+        `;
+
+    } else {
+
+        messageElement.classList.add("assistant-message");
+
+        messageElement.innerHTML = `
+            <strong>HVAC Assistant:</strong> ${escapeHtml(text)}
+        `;
+    }
+
+    chatBox.appendChild(messageElement);
+
+    // Automatically scroll to the newest message.
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+
+// ------------------------------------------------------------
+// Safely display user/assistant text
+// ------------------------------------------------------------
+
+function escapeHtml(text) {
+
+    const div = document.createElement("div");
+
+    div.textContent = text;
+
+    return div.innerHTML;
+}
+
+
+// ------------------------------------------------------------
+// Display the structured HVAC constraint
+// ------------------------------------------------------------
+
+function displayConstraint(constraint) {
+
+    if (!constraint) {
+        return;
+    }
+
+    const constraintElement = document.createElement("div");
+
+    constraintElement.classList.add(
+        "constraint-message"
+    );
+
+    constraintElement.innerHTML = `
+        <strong>HVAC Constraint</strong>
+        <br>
+        Zone: ${escapeHtml(String(constraint.zone_id ?? ""))}
+        <br>
+        Parameter: ${escapeHtml(String(constraint.parameter ?? ""))}
+        <br>
+        Direction: ${escapeHtml(String(constraint.direction ?? ""))}
+        <br>
+        Intensity: ${escapeHtml(String(constraint.intensity ?? ""))}
+    `;
+
+    chatBox.appendChild(constraintElement);
+
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+
+// ------------------------------------------------------------
+// Send message to FastAPI
+// ------------------------------------------------------------
+
+async function sendMessage() {
+
+    const message = messageInput.value.trim();
+
+    // Do not send an empty message.
+    if (!message) {
         return;
     }
 
 
-    // --------------------------------------------------------
-    // Show user's message
-    // --------------------------------------------------------
-
-    addMessage("You", complaint);
-
-    complaintInput.value = "";
+    // Show user's message immediately.
+    addMessage(
+        "user",
+        message
+    );
 
 
-    // --------------------------------------------------------
-    // Show processing message
-    // --------------------------------------------------------
+    // Clear input box.
+    messageInput.value = "";
 
-    addMessage("AI", "Analyzing your complaint...");
+
+    // Disable button while request is being processed.
+    sendButton.disabled = true;
+
+    sendButton.textContent = "Sending...";
 
 
     try {
 
         // ----------------------------------------------------
-        // Send complaint to Python NLP API
+        // Send HTTP POST request to FastAPI
         // ----------------------------------------------------
 
         const response = await fetch(
-            "http://127.0.0.1:8000/nlp/parse",
+            API_URL,
             {
                 method: "POST",
 
@@ -58,7 +176,8 @@ feedbackForm.addEventListener("submit", async function(event) {
                 },
 
                 body: JSON.stringify({
-                    complaint: complaint
+                    session_id: sessionId,
+                    message: message
                 })
             }
         );
@@ -69,6 +188,7 @@ feedbackForm.addEventListener("submit", async function(event) {
         // ----------------------------------------------------
 
         if (!response.ok) {
+
             throw new Error(
                 `Server returned ${response.status}`
             );
@@ -81,94 +201,105 @@ feedbackForm.addEventListener("submit", async function(event) {
 
         const data = await response.json();
 
-        console.log("NLP API response:");
-        console.log(data);
-
 
         // ----------------------------------------------------
-        // Remove "Analyzing..." message
+        // Save session ID returned by backend
         // ----------------------------------------------------
 
-        const messages = chat.querySelectorAll("p");
+        if (data.session_id) {
 
-        if (messages.length > 0) {
-            messages[messages.length - 1].remove();
+            sessionId = data.session_id;
+
+            localStorage.setItem(
+                "hvac_session_id",
+                sessionId
+            );
         }
 
 
         // ----------------------------------------------------
-        // Handle successful HVAC constraint
+        // Display assistant reply
         // ----------------------------------------------------
 
-        if (
-            data.status === "success" &&
-            data.constraint
-        ) {
-
-            const constraint = data.constraint;
-
-            const message =
-                `I understood that <strong>${constraint.zone_id}</strong> ` +
-                `needs <strong>${constraint.direction}</strong> ` +
-                `${constraint.parameter} adjustment ` +
-                `(${constraint.intensity}).`;
-
-            addMessage("AI", message);
-
-        }
-
-
-        // ----------------------------------------------------
-        // Handle clarification
-        // ----------------------------------------------------
-
-        else if (
-            data.status === "clarification_required"
-        ) {
+        if (data.reply) {
 
             addMessage(
-                "AI",
-                data.message
+                "assistant",
+                data.reply
             );
-
         }
 
 
         // ----------------------------------------------------
-        // Handle unexpected response
+        // Display structured constraint
         // ----------------------------------------------------
 
-        else {
+        if (data.constraint) {
 
-            addMessage(
-                "AI",
-                "I couldn't understand the response from the NLP service."
+            displayConstraint(
+                data.constraint
             );
-
         }
 
-    }
 
+        // ----------------------------------------------------
+        // Debug information
+        // ----------------------------------------------------
 
-    // --------------------------------------------------------
-    // Handle connection/API errors
-    // --------------------------------------------------------
+        console.log(
+            "HVAC API response:",
+            data
+        );
 
-    catch (error) {
+    } catch (error) {
 
-        console.error("NLP API error:", error);
+        console.error(
+            "Error communicating with HVAC API:",
+            error
+        );
 
-        // Remove "Analyzing..." message
-        const messages = chat.querySelectorAll("p");
-
-        if (messages.length > 0) {
-            messages[messages.length - 1].remove();
-        }
 
         addMessage(
-            "AI",
-            "I couldn't connect to the NLP service. Please make sure the Python API is running."
+            "assistant",
+            "Sorry, I could not connect to the HVAC service. Please make sure the FastAPI server is running."
         );
-    }
 
-});
+    } finally {
+
+        // Re-enable send button.
+        sendButton.disabled = false;
+
+        sendButton.textContent = "Send";
+
+        // Put cursor back in input box.
+        messageInput.focus();
+    }
+}
+
+
+// ------------------------------------------------------------
+// Send when button is clicked
+// ------------------------------------------------------------
+
+sendButton.addEventListener(
+    "click",
+    sendMessage
+);
+
+
+// ------------------------------------------------------------
+// Send when Enter is pressed
+// ------------------------------------------------------------
+
+messageInput.addEventListener(
+    "keydown",
+    function (event) {
+
+        if (event.key === "Enter") {
+
+            event.preventDefault();
+
+            sendMessage();
+        }
+    }
+);
