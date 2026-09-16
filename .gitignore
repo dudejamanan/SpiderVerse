@@ -94,6 +94,14 @@ rl_logs/
 sb3_logs/
 
 # =========================
+# Node / JS
+# =========================
+
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# =========================
 # Generated data
 # =========================
 
